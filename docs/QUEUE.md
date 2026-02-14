@@ -449,7 +449,7 @@ tail -f ~/.tinyclaw/logs/queue.log
 - Check logs: `tail -f ~/.tinyclaw/logs/queue.log`
 
 **Agents not processing in parallel:**
-- Check TypeScript build: `npm run build`
+- Check TypeScript build: `bun run build`
 - Check queue processor version in logs
 
 ## Advanced Topics

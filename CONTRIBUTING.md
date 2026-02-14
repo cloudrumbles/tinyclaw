@@ -7,15 +7,15 @@ Thanks for your interest in contributing!
 ```bash
 git clone https://github.com/jlia0/tinyclaw.git
 cd tinyclaw
-npm install
-npm run build
+bun install
+bun run build
 ```
 
 ## Development
 
 ```bash
 # Build TypeScript
-npm run build
+bun run build
 
 # Run locally
 ./tinyclaw.sh start

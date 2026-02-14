@@ -9,8 +9,8 @@ curl -fsSL https://raw.githubusercontent.com/jlia0/tinyclaw/main/scripts/remote-
 ```
 
 This one-line command:
-- ✅ Checks all dependencies (node, npm, claude)
-- ✅ Downloads pre-built bundle (no npm install needed!)
+- ✅ Checks all dependencies (bun, claude)
+- ✅ Downloads pre-built bundle (no bun install needed!)
 - ✅ Installs to `~/.tinyclaw`
 - ✅ Creates global `tinyclaw` command
 - ✅ Falls back to source install if no bundle available
@@ -24,8 +24,7 @@ tinyclaw start
 
 Before installing, ensure you have:
 
-- **Node.js** v14+ ([nodejs.org](https://nodejs.org/))
-- **npm** (comes with Node.js)
+- **Bun** ([bun.sh](https://bun.sh/))
 - **Claude Code CLI** ([claude.com/claude-code](https://claude.com/claude-code))
 
 **Optional:**
@@ -79,8 +78,8 @@ Clone the repository and build locally:
 git clone https://github.com/jlia0/tinyclaw.git
 cd tinyclaw
 
-# Install dependencies (may take a few minutes)
-npm install
+# Install dependencies
+bun install
 
 # Install CLI globally
 ./scripts/install.sh
@@ -97,7 +96,7 @@ Run without installing the global command:
 git clone https://github.com/jlia0/tinyclaw.git
 cd tinyclaw
 
-npm install
+bun install
 
 # Run directly
 tinyclaw start
@@ -181,8 +180,8 @@ curl -fsSL https://raw.githubusercontent.com/jlia0/tinyclaw/main/scripts/remote-
 Install missing dependencies:
 
 ```bash
-# Node.js & npm
-# Visit: https://nodejs.org/
+# Bun
+# Visit: https://bun.sh/
 
 # Claude Code
 # Visit: https://claude.com/claude-code
@@ -193,7 +192,7 @@ Install missing dependencies:
 If the pre-built bundle is unavailable:
 - The installer automatically falls back to source install
 - Requires `git` to be installed
-- Will run `npm install` (may take longer)
+- Will run `bun install` (may take longer)
 
 ## Next Steps
 

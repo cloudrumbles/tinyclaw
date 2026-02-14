@@ -35,7 +35,7 @@
 ### Prerequisites
 
 - macOS or Linux
-- Node.js v14+
+- [Bun](https://bun.sh/)
 - Bash 4.0+ (macOS: `brew install bash`)
 - [Claude Code CLI](https://claude.com/claude-code) (for Anthropic provider)
 - [Codex CLI](https://docs.openai.com/codex) (for OpenAI provider)
@@ -60,7 +60,7 @@ cd tinyclaw && ./scripts/install.sh
 
 ```bash
 git clone https://github.com/jlia0/tinyclaw.git
-cd tinyclaw && npm install && ./scripts/install.sh
+cd tinyclaw && bun install && ./scripts/install.sh
 ```
 
 ### First Run

@@ -24,13 +24,12 @@ export PATH="/opt/homebrew/bin:$PATH"
 tinyclaw start
 ```
 
-### Node.js dependencies not installing
+### Dependencies not installing
 
 ```bash
-# Clear npm cache and reinstall
-rm -rf node_modules package-lock.json
-npm cache clean --force
-PUPPETEER_SKIP_DOWNLOAD=true npm install
+# Clear and reinstall
+rm -rf node_modules bun.lock
+PUPPETEER_SKIP_DOWNLOAD=true bun install
 ```
 
 ## Channel Issues
