@@ -171,8 +171,6 @@ status_daemon() {
     echo ""
 
     # Channel process status
-    local ready_file="$SCRIPT_DIR/.tinyclaw/channels/whatsapp_ready"
-
     for ch in "${ALL_CHANNELS[@]}"; do
         local display="${CHANNEL_DISPLAY[$ch]}"
         local script="${CHANNEL_SCRIPT[$ch]}"
@@ -181,13 +179,7 @@ status_daemon() {
         while [ $((${#display} + ${#pad})) -lt 16 ]; do pad="$pad "; done
 
         if pgrep -f "$script" > /dev/null; then
-            if [ "$ch" = "whatsapp" ] && [ -f "$ready_file" ]; then
-                echo -e "${display}:${pad}${GREEN}Running & Ready${NC}"
-            elif [ "$ch" = "whatsapp" ]; then
-                echo -e "${display}:${pad}${YELLOW}Running (not ready yet)${NC}"
-            else
-                echo -e "${display}:${pad}${GREEN}Running${NC}"
-            fi
+            echo -e "${display}:${pad}${GREEN}Running${NC}"
         else
             echo -e "${display}:${pad}${RED}Not Running${NC}"
         fi

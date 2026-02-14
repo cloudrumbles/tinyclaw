@@ -5,7 +5,7 @@ TinyClaw uses a file-based queue system to coordinate message processing across 
 ## Overview
 
 The queue system acts as a central coordinator between:
-- **Channel clients** (Discord, Telegram, WhatsApp) - produce messages
+- **Channel clients** (Discord, Telegram) - produce messages
 - **Queue processor** - routes and processes messages
 - **AI providers** (Claude, Codex) - generate responses
 - **Agents** - isolated AI agents with different configs
@@ -13,7 +13,7 @@ The queue system acts as a central coordinator between:
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                     Message Channels                         │
-│         (Discord, Telegram, WhatsApp, Heartbeat)            │
+│         (Discord, Telegram, Heartbeat)                      │
 └────────────────────┬────────────────────────────────────────┘
                      │ Write message.json
                      ↓

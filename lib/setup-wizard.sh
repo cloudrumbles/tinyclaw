@@ -19,12 +19,11 @@ echo ""
 
 # --- Channel registry ---
 # To add a new channel, add its ID here and fill in the config arrays below.
-ALL_CHANNELS=(telegram discord whatsapp)
+ALL_CHANNELS=(telegram discord)
 
 declare -A CHANNEL_DISPLAY=(
     [telegram]="Telegram"
     [discord]="Discord"
-    [whatsapp]="WhatsApp"
 )
 declare -A CHANNEL_TOKEN_KEY=(
     [discord]="discord_bot_token"
@@ -40,7 +39,7 @@ declare -A CHANNEL_TOKEN_HELP=(
 )
 
 # Channel selection - simple checklist
-echo "Which messaging channels (Telegram, Discord, WhatsApp) do you want to enable?"
+echo "Which messaging channels (Telegram, Discord) do you want to enable?"
 echo ""
 
 ENABLED_CHANNELS=()
@@ -287,8 +286,7 @@ cat > "$SETTINGS_FILE" <<EOF
     },
     "telegram": {
       "bot_token": "${TELEGRAM_TOKEN}"
-    },
-    "whatsapp": {}
+    }
   },
   ${AGENTS_JSON}
   ${MODELS_SECTION},

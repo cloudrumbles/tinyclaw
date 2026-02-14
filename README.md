@@ -21,7 +21,7 @@
 
 - ✅ **Multi-agent** - Run multiple isolated AI agents with specialized roles
 - ✅ **Multi-team collaboration** - Agents hand off work to teammates via chain execution and fan-out
-- ✅ **Multi-channel** - Discord, WhatsApp, and Telegram
+- ✅ **Multi-channel** - Discord and Telegram
 - ✅ **Team Observation** - You can observe agent teams conversations via `tinyclaw team visualize`
 - ✅ **Multiple AI providers** - Anthropic Claude and OpenAI Codex using existing subscriptions without breaking ToS
 - ✅ **Parallel processing** - Agents process messages concurrently
@@ -71,7 +71,7 @@ tinyclaw start  # Runs interactive setup wizard
 
 The setup wizard will guide you through:
 
-1. **Channel selection** - Choose Discord, WhatsApp, and/or Telegram
+1. **Channel selection** - Choose Discord and/or Telegram
 2. **Bot tokens** - Enter tokens for enabled channels
 3. **Workspace setup** - Name your workspace directory
 4. **Default agent** - Configure your main AI assistant
@@ -97,19 +97,6 @@ The setup wizard will guide you through:
 3. Copy bot token
 4. Start chat with your bot
 
-### WhatsApp Setup
-
-After starting TinyClaw, scan the QR code:
-
-```
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-     WhatsApp QR Code
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-[QR CODE HERE]
-
-📱 Settings → Linked Devices → Link a Device
-```
-
 </details>
 
 ## 📋 Commands
@@ -125,7 +112,7 @@ Commands work with `tinyclaw` (if CLI installed) or `./tinyclaw.sh` (direct scri
 | `restart`     | Restart TinyClaw                                          | `tinyclaw restart`    |
 | `status`      | Show current status and activity                          | `tinyclaw status`     |
 | `setup`       | Run setup wizard (reconfigure)                            | `tinyclaw setup`      |
-| `logs [type]` | View logs (discord/telegram/whatsapp/queue/heartbeat/all) | `tinyclaw logs queue` |
+| `logs [type]` | View logs (discord/telegram/queue/heartbeat/all) | `tinyclaw logs queue` |
 
 ### Agent Commands
 
@@ -155,7 +142,7 @@ Commands work with `tinyclaw` (if CLI installed) or `./tinyclaw.sh` (direct scri
 | `provider <name> --model <model>` | Switch provider and model    | `tinyclaw provider openai --model gpt-5.3-codex` |
 | `model [name]`                    | Show or switch AI model      | `tinyclaw model opus`                            |
 | `reset`                           | Reset all conversations      | `tinyclaw reset`                                 |
-| `channels reset <channel>`        | Reset channel authentication | `tinyclaw channels reset whatsapp`               |
+| `channels reset <channel>`        | Reset channel authentication | `tinyclaw channels reset telegram`               |
 
 ### Pairing Commands
 
@@ -225,7 +212,7 @@ export TINYCLAW_SKIP_UPDATE_CHECK=1
 
 ### In-Chat Commands
 
-These commands work in Discord, Telegram, and WhatsApp:
+These commands work in Discord and Telegram:
 
 | Command             | Description                          | Example                 |
 | ------------------- | ------------------------------------ | ----------------------- |
@@ -234,7 +221,7 @@ These commands work in Discord, Telegram, and WhatsApp:
 | `/agent`            | List all available agents            | `/agent`                |
 | `/team`             | List all available teams             | `/team`                 |
 | `@agent_id /reset`  | Reset specific agent conversation    | `@coder /reset`         |
-| `/reset`            | Reset conversation (WhatsApp/global) | `/reset` or `!reset`    |
+| `/reset`            | Reset conversation                   | `/reset`                |
 | `message`           | Send to default agent (no prefix)    | `help me with this`     |
 
 **Note:** The `@agent_id` routing prefix requires a space after it (e.g., `@coder fix` not `@coderfix`).
@@ -306,7 +293,7 @@ See [docs/AGENTS.md](docs/AGENTS.md) for:
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                     Message Channels                         │
-│         (Discord, Telegram, WhatsApp, Heartbeat)            │
+│         (Discord, Telegram, Heartbeat)                      │
 └────────────────────┬────────────────────────────────────────┘
                      │ Write message.json
                      ↓
@@ -399,10 +386,9 @@ Located at `.tinyclaw/settings.json`:
 ```json
 {
   "channels": {
-    "enabled": ["discord", "telegram", "whatsapp"],
+    "enabled": ["discord", "telegram"],
     "discord": { "bot_token": "..." },
-    "telegram": { "bot_token": "..." },
-    "whatsapp": {}
+    "telegram": { "bot_token": "..." }
   },
   "workspace": {
     "path": "/Users/me/tinyclaw-workspace",
@@ -483,7 +469,6 @@ Teams support sequential chains (single handoff) and parallel fan-out (multiple 
 
 ### Cross-Device Access
 
-- WhatsApp on phone
 - Discord on desktop
 - Telegram anywhere
 - CLI for automation
@@ -507,9 +492,6 @@ See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for detailed solutions.
 # Reset everything (preserves settings)
 tinyclaw stop && rm -rf .tinyclaw/queue/* && tinyclaw start
 
-# Reset WhatsApp
-tinyclaw channels reset whatsapp
-
 # Check status
 tinyclaw status
 
@@ -520,7 +502,6 @@ tinyclaw logs all
 **Common issues:**
 
 - Bash version error → Install bash 4.0+: `brew install bash`
-- WhatsApp not connecting → Reset auth: `tinyclaw channels reset whatsapp`
 - Messages stuck → Clear queue: `rm -rf .tinyclaw/queue/processing/*`
 - Agent not found → Check: `tinyclaw agent list`
 
@@ -533,7 +514,7 @@ tinyclaw logs all
 
 - Inspired by [OpenClaw](https://openclaw.ai/) by Peter Steinberger
 - Built on [Claude Code](https://claude.com/claude-code) and [Codex CLI](https://docs.openai.com/codex)
-- Uses [discord.js](https://discord.js.org/), [whatsapp-web.js](https://github.com/pedroslopez/whatsapp-web.js), [node-telegram-bot-api](https://github.com/yagop/node-telegram-bot-api)
+- Uses [discord.js](https://discord.js.org/), [node-telegram-bot-api](https://github.com/yagop/node-telegram-bot-api)
 
 ## 📄 License
 

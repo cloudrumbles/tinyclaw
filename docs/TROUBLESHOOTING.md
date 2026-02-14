@@ -34,27 +34,6 @@ PUPPETEER_SKIP_DOWNLOAD=true bun install
 
 ## Channel Issues
 
-### WhatsApp not connecting
-
-```bash
-# Check logs
-tinyclaw logs whatsapp
-
-# Reset WhatsApp authentication
-tinyclaw channels reset whatsapp
-tinyclaw restart
-```
-
-**Common causes:**
-- QR code expired (scan within 60 seconds)
-- Session files corrupted
-- Multiple WhatsApp Web sessions active
-
-**Solution:**
-1. Delete session: `rm -rf .tinyclaw/whatsapp-session/`
-2. Restart: `tinyclaw restart`
-3. Scan new QR code immediately
-
 ### Discord bot not responding
 
 ```bash
@@ -85,13 +64,6 @@ tinyclaw setup
 - Bot token is invalid or revoked
 - Bot wasn't started (send `/start` to your bot first)
 - Bot removed from group
-
-### QR code not showing
-
-The QR code is printed to the WhatsApp client's log. If it's not visible:
-1. Check if WhatsApp is enabled: `cat .tinyclaw/settings.json | jq '.channels.enabled'`
-2. Check WhatsApp process: `pgrep -f whatsapp-client.ts`
-3. View logs: `tail -f .tinyclaw/logs/whatsapp.log`
 
 ## Queue Issues
 
@@ -134,7 +106,6 @@ ls -la .tinyclaw/queue/outgoing/
 # Check channel client logs
 tinyclaw logs discord
 tinyclaw logs telegram
-tinyclaw logs whatsapp
 ```
 
 ## Agent Issues
@@ -350,7 +321,6 @@ ps aux | grep -E 'claude|codex|node' | awk '{print $4, $11}'
 **Solutions:**
 - Restart TinyClaw: `tinyclaw restart`
 - Reset conversations: `tinyclaw reset`
-- Clear old sessions: `rm -rf .tinyclaw/whatsapp-session/.wwebjs_*`
 
 ### Slow message responses
 
@@ -436,7 +406,6 @@ Quick reference for common recovery scenarios:
 tinyclaw stop
 rm -rf .tinyclaw/queue/*
 rm -rf .tinyclaw/channels/*
-rm -rf .tinyclaw/whatsapp-session/*
 tinyclaw start
 
 # Complete reinstall

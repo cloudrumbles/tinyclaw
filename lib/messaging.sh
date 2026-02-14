@@ -56,19 +56,6 @@ channels_reset() {
 
     echo -e "${YELLOW}Resetting ${display} authentication...${NC}"
 
-    # WhatsApp has local session files to clear
-    if [ "$ch" = "whatsapp" ]; then
-        rm -rf "$SCRIPT_DIR/.tinyclaw/whatsapp-session"
-        rm -f "$SCRIPT_DIR/.tinyclaw/channels/whatsapp_ready"
-        rm -f "$SCRIPT_DIR/.tinyclaw/channels/whatsapp_qr.txt"
-        rm -rf "$SCRIPT_DIR/.wwebjs_cache"
-        echo -e "${GREEN}✓ WhatsApp session cleared${NC}"
-        echo ""
-        echo "Restart TinyClaw to re-authenticate:"
-        echo -e "  ${GREEN}tinyclaw restart${NC}"
-        return
-    fi
-
     # Token-based channels
     local token_key="${CHANNEL_TOKEN_KEY[$ch]:-}"
     if [ -n "$token_key" ]; then

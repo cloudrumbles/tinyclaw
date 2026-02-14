@@ -388,7 +388,7 @@ case "${1:-}" in
         echo "  $0 pairing unpair telegram 123456789"
         echo "  $0 send '@coder fix the bug'"
         echo "  $0 send '@dev fix the auth bug'"
-        echo "  $0 channels reset whatsapp"
+        echo "  $0 channels reset telegram"
         echo "  $0 logs telegram"
         echo ""
         exit 1

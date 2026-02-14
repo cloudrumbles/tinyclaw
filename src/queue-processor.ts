@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Queue Processor - Handles messages from all channels (WhatsApp, Telegram, etc.)
+ * Queue Processor - Handles messages from all channels (Discord, Telegram, etc.)
  * Processes one message at a time to avoid race conditions
  *
  * Supports multi-agent routing:

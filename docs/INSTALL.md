@@ -126,7 +126,7 @@ tinyclaw start
 ```
 
 You'll configure:
-1. **Channel** - Discord, WhatsApp, or both
+1. **Channel** - Discord and/or Telegram
 2. **Discord bot token** (if using Discord)
 3. **Claude model** - Sonnet (fast) or Opus (smart)
 4. **Heartbeat interval** - How often Claude checks in

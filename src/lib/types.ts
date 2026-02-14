@@ -25,7 +25,6 @@ export interface Settings {
         enabled?: string[];
         discord?: { bot_token?: string };
         telegram?: { bot_token?: string };
-        whatsapp?: {};
     };
     models?: {
         provider?: string; // 'anthropic' or 'openai'

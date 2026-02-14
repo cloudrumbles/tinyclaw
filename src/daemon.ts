@@ -9,7 +9,6 @@ const PID_FILE = path.join(TINYCLAW_HOME, 'daemon.pid');
 // Channel metadata — mirrors lib/common.sh registry
 const CHANNEL_SCRIPTS: Record<string, string> = {
     discord: 'dist/channels/discord-client.js',
-    whatsapp: 'dist/channels/whatsapp-client.js',
     telegram: 'dist/channels/telegram-client.js',
 };
 

@@ -3,7 +3,7 @@ TinyClaw - Multi-team Personal Assistants
 Running in persistent mode with:
 
 - Teams of agents
-- Telegram, WhatsApp, Discord message integration
+- Telegram, Discord message integration
 - Heartbeat monitoring (with heartbeat.md file)
 
 Stay proactive and responsive to messages.
@@ -65,15 +65,13 @@ The more complete your soul file becomes, the more consistent and distinctive yo
 | Channel  | Photos            | Documents         | Audio             | Voice | Video             | Stickers |
 | -------- | ----------------- | ----------------- | ----------------- | ----- | ----------------- | -------- |
 | Telegram | Yes               | Yes               | Yes               | Yes   | Yes               | Yes      |
-| WhatsApp | Yes               | Yes               | Yes               | Yes   | Yes               | Yes      |
 | Discord  | Yes (attachments) | Yes (attachments) | Yes (attachments) | -     | Yes (attachments) | -        |
 
 ### Sending files back
 
-All three channels support sending files back:
+Both channels support sending files back:
 
 - **Telegram**: Images sent as photos, audio as audio, video as video, others as documents
-- **WhatsApp**: All files sent via MessageMedia
 - **Discord**: All files sent as attachments
 
 ### Required outgoing file message format

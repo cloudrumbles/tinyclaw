@@ -18,7 +18,7 @@ The agent management feature enables you to:
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    Message Channels                          │
-│              (Discord, Telegram, WhatsApp)                   │
+│              (Discord, Telegram)                              │
 └────────────────────┬────────────────────────────────────────┘
                      │
                      │ User sends: "@coder fix the bug"
@@ -262,7 +262,7 @@ Edit `.tinyclaw/settings.json`:
 
 ### Routing Messages to Agents
 
-**In any messaging channel** (Discord, Telegram, WhatsApp):
+**In any messaging channel** (Discord, Telegram):
 
 ```
 @coder fix the authentication bug in login.ts
