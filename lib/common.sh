@@ -123,7 +123,14 @@ is_active() {
     return 1
 }
 
-# Check if tmux session exists
+# Check if daemon is running via PID file
 session_exists() {
-    tmux has-session -t "$TMUX_SESSION" 2>/dev/null
+    local pid_file="$HOME/.tinyclaw/daemon.pid"
+    if [ -f "$pid_file" ]; then
+        local pid
+        pid=$(cat "$pid_file")
+        kill -0 "$pid" 2>/dev/null
+    else
+        return 1
+    fi
 }

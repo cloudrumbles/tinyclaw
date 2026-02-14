@@ -1,12 +1,10 @@
 import fs from 'fs';
 import path from 'path';
-import { LOG_FILE, EVENTS_DIR } from './config';
+import { EVENTS_DIR } from './config';
 
 export function log(level: string, message: string): void {
     const timestamp = new Date().toISOString();
-    const logMessage = `[${timestamp}] [${level}] ${message}\n`;
-    console.log(logMessage.trim());
-    fs.appendFileSync(LOG_FILE, logMessage);
+    console.log(`[${timestamp}] [${level}] ${message}`);
 }
 
 /**

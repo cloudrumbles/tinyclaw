@@ -10,6 +10,7 @@
     "discord": "bun dist/channels/discord-client.js",
     "telegram": "bun dist/channels/telegram-client.js",
     "queue": "bun dist/queue-processor.js",
+    "daemon": "bun dist/daemon.js",
     "visualize": "bun dist/visualizer/team-visualizer.js"
   },
   "dependencies": {

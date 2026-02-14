@@ -22,13 +22,12 @@ const TINYCLAW_HOME = fs.existsSync(path.join(_localTinyclaw, 'settings.json'))
     : path.join(require('os').homedir(), '.tinyclaw');
 const QUEUE_INCOMING = path.join(TINYCLAW_HOME, 'queue/incoming');
 const QUEUE_OUTGOING = path.join(TINYCLAW_HOME, 'queue/outgoing');
-const LOG_FILE = path.join(TINYCLAW_HOME, 'logs/telegram.log');
 const SETTINGS_FILE = path.join(TINYCLAW_HOME, 'settings.json');
 const FILES_DIR = path.join(TINYCLAW_HOME, 'files');
 const PAIRING_FILE = path.join(TINYCLAW_HOME, 'pairing.json');
 
 // Ensure directories exist
-[QUEUE_INCOMING, QUEUE_OUTGOING, path.dirname(LOG_FILE), FILES_DIR].forEach(dir => {
+[QUEUE_INCOMING, QUEUE_OUTGOING, FILES_DIR].forEach(dir => {
     if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
     }
@@ -96,12 +95,10 @@ function buildUniqueFilePath(dir: string, preferredName: string): string {
 const pendingMessages = new Map<string, PendingMessage>();
 let processingOutgoingQueue = false;
 
-// Logger
+// Logger — writes to stdout, daemon routes to log file
 function log(level: string, message: string): void {
     const timestamp = new Date().toISOString();
-    const logMessage = `[${timestamp}] [${level}] ${message}\n`;
-    console.log(logMessage.trim());
-    fs.appendFileSync(LOG_FILE, logMessage);
+    console.log(`[${timestamp}] [${level}] ${message}`);
 }
 
 // Load teams from settings for /team command

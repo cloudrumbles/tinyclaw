@@ -13,7 +13,6 @@ if [ -n "$TINYCLAW_HOME" ]; then
 else
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fi
-TMUX_SESSION="tinyclaw"
 # Centralize all logs to ~/.tinyclaw/logs
 LOG_DIR="$HOME/.tinyclaw/logs"
 if [ -f "$SCRIPT_DIR/.tinyclaw/settings.json" ]; then
@@ -44,10 +43,6 @@ case "${1:-}" in
         ;;
     restart)
         restart_daemon
-        ;;
-    __delayed_start)
-        sleep 2
-        start_daemon
         ;;
     status)
         status_daemon
@@ -350,9 +345,6 @@ case "${1:-}" in
     pairing)
         pairing_command "${2:-}" "${3:-}"
         ;;
-    attach)
-        tmux attach -t "$TMUX_SESSION"
-        ;;
     setup)
         "$SCRIPT_DIR/lib/setup-wizard.sh"
         ;;
@@ -363,7 +355,7 @@ case "${1:-}" in
         local_names=$(IFS='|'; echo "${ALL_CHANNELS[*]}")
         echo -e "${BLUE}TinyClaw - Claude Code + Messaging Channels${NC}"
         echo ""
-        echo "Usage: $0 {start|stop|restart|status|setup|send|logs|reset|channels|provider|model|agent|team|pairing|update|attach}"
+        echo "Usage: $0 {start|stop|restart|status|setup|send|logs|reset|channels|provider|model|agent|team|pairing|update}"
         echo ""
         echo "Commands:"
         echo "  start                    Start TinyClaw"
@@ -381,7 +373,6 @@ case "${1:-}" in
         echo "  team {list|add|remove|show|visualize}  Manage teams"
         echo "  pairing {pending|approved|list|approve <code>|unpair <channel> <sender_id>}  Manage sender approvals"
         echo "  update                   Update TinyClaw to latest version"
-        echo "  attach                   Attach to tmux session"
         echo ""
         echo "Examples:"
         echo "  $0 start"

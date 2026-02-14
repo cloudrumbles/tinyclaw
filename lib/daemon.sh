@@ -2,10 +2,12 @@
 # Daemon lifecycle management for TinyClaw
 # Handles starting, stopping, restarting, and status checking
 
+PID_FILE="$HOME/.tinyclaw/daemon.pid"
+
 # Start daemon
 start_daemon() {
     if session_exists; then
-        echo -e "${YELLOW}Session already running${NC}"
+        echo -e "${YELLOW}Daemon already running${NC}"
         return 1
     fi
 
@@ -64,16 +66,6 @@ start_daemon() {
         fi
     done
 
-    # Write tokens to .env for the Node.js clients
-    local env_file="$SCRIPT_DIR/.env"
-    : > "$env_file"
-    for ch in "${ACTIVE_CHANNELS[@]}"; do
-        local env_var="${CHANNEL_TOKEN_ENV[$ch]:-}"
-        if [ -n "$env_var" ] && [ -n "${CHANNEL_TOKENS[$ch]:-}" ]; then
-            echo "${env_var}=${CHANNEL_TOKENS[$ch]}" >> "$env_file"
-        fi
-    done
-
     # Check for updates (non-blocking)
     local update_info
     update_info=$(check_for_updates 2>/dev/null || true)
@@ -89,166 +81,73 @@ start_daemon() {
     done
     echo ""
 
-    # Build log tail command
-    local log_tail_cmd="tail -f $LOG_DIR/queue.log"
-    for ch in "${ACTIVE_CHANNELS[@]}"; do
-        log_tail_cmd="$log_tail_cmd $LOG_DIR/${ch}.log"
-    done
+    # Launch the daemon process in the background
+    nohup bun "$SCRIPT_DIR/dist/daemon.js" >> "$LOG_DIR/daemon.log" 2>&1 &
+    local daemon_pid=$!
 
-    # --- Build tmux session dynamically ---
-    # Total panes = N channels + 3 (queue, heartbeat, logs)
-    local total_panes=$(( ${#ACTIVE_CHANNELS[@]} + 3 ))
+    # Wait briefly and verify it started
+    sleep 2
+    if ! kill -0 "$daemon_pid" 2>/dev/null; then
+        echo -e "${RED}Daemon failed to start. Check logs:${NC}"
+        echo "  tail -f $LOG_DIR/daemon.log"
+        return 1
+    fi
 
-    tmux new-session -d -s "$TMUX_SESSION" -n "tinyclaw" -c "$SCRIPT_DIR"
-
-    # Create remaining panes (pane 0 already exists)
-    for ((i=1; i<total_panes; i++)); do
-        tmux split-window -t "$TMUX_SESSION" -c "$SCRIPT_DIR"
-        tmux select-layout -t "$TMUX_SESSION" tiled  # rebalance after each split
-    done
-
-    # Assign channel panes
-    local pane_idx=0
-    local whatsapp_pane=-1
-    for ch in "${ACTIVE_CHANNELS[@]}"; do
-        [ "$ch" = "whatsapp" ] && whatsapp_pane=$pane_idx
-        tmux send-keys -t "$TMUX_SESSION:0.$pane_idx" "cd '$SCRIPT_DIR' && bun ${CHANNEL_SCRIPT[$ch]}" C-m
-        tmux select-pane -t "$TMUX_SESSION:0.$pane_idx" -T "${CHANNEL_DISPLAY[$ch]}"
-        pane_idx=$((pane_idx + 1))
-    done
-
-    # Queue pane
-    tmux send-keys -t "$TMUX_SESSION:0.$pane_idx" "cd '$SCRIPT_DIR' && bun dist/queue-processor.js" C-m
-    tmux select-pane -t "$TMUX_SESSION:0.$pane_idx" -T "Queue"
-    pane_idx=$((pane_idx + 1))
-
-    # Heartbeat pane
-    tmux send-keys -t "$TMUX_SESSION:0.$pane_idx" "cd '$SCRIPT_DIR' && ./lib/heartbeat-cron.sh" C-m
-    tmux select-pane -t "$TMUX_SESSION:0.$pane_idx" -T "Heartbeat"
-    pane_idx=$((pane_idx + 1))
-
-    # Logs pane
-    tmux send-keys -t "$TMUX_SESSION:0.$pane_idx" "cd '$SCRIPT_DIR' && $log_tail_cmd" C-m
-    tmux select-pane -t "$TMUX_SESSION:0.$pane_idx" -T "Logs"
-
-    echo ""
     echo -e "${GREEN}✓ TinyClaw started${NC}"
     echo ""
-
-    # WhatsApp QR code flow — only when WhatsApp is being started
-    if [ "$whatsapp_pane" -ge 0 ]; then
-        echo -e "${YELLOW}Starting WhatsApp client...${NC}"
-        echo ""
-
-        QR_FILE="$SCRIPT_DIR/.tinyclaw/channels/whatsapp_qr.txt"
-        READY_FILE="$SCRIPT_DIR/.tinyclaw/channels/whatsapp_ready"
-        QR_DISPLAYED=false
-
-        for i in {1..60}; do
-            sleep 1
-
-            if [ -f "$READY_FILE" ]; then
-                echo ""
-                echo -e "${GREEN}WhatsApp connected and ready!${NC}"
-                rm -f "$QR_FILE"
-                break
-            fi
-
-            if [ -f "$QR_FILE" ] && [ "$QR_DISPLAYED" = false ]; then
-                sleep 1
-                clear
-                echo ""
-                echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-                echo -e "${GREEN}                    WhatsApp QR Code${NC}"
-                echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-                echo ""
-                cat "$QR_FILE"
-                echo ""
-                echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-                echo ""
-                echo -e "${YELLOW}Scan this QR code with WhatsApp:${NC}"
-                echo ""
-                echo "   1. Open WhatsApp on your phone"
-                echo "   2. Go to Settings -> Linked Devices"
-                echo "   3. Tap 'Link a Device'"
-                echo "   4. Scan the QR code above"
-                echo ""
-                echo -e "${BLUE}Waiting for connection...${NC}"
-                QR_DISPLAYED=true
-            fi
-
-            if [ "$QR_DISPLAYED" = true ] || [ $i -gt 10 ]; then
-                echo -n "."
-            fi
-        done
-        echo ""
-
-        if [ $i -eq 60 ] && [ ! -f "$READY_FILE" ]; then
-            echo ""
-            echo -e "${RED}WhatsApp didn't connect within 60 seconds${NC}"
-            echo ""
-            echo -e "${YELLOW}Try restarting TinyClaw:${NC}"
-            echo -e "  ${GREEN}tinyclaw restart${NC}"
-            echo ""
-            echo "Or check WhatsApp client status:"
-            echo -e "  ${GREEN}tmux attach -t $TMUX_SESSION${NC}"
-            echo ""
-            echo "Or check logs:"
-            echo -e "  ${GREEN}tinyclaw logs whatsapp${NC}"
-            echo ""
-        fi
-    fi
 
     # Build channel names for help line
     local channel_names
     channel_names=$(IFS='|'; echo "${ACTIVE_CHANNELS[*]}")
 
-    echo ""
     echo -e "${GREEN}Commands:${NC}"
     echo "  Status:  tinyclaw status"
-    echo "  Logs:    tinyclaw logs [$channel_names|queue]"
-    echo "  Attach:  tmux attach -t $TMUX_SESSION"
+    echo "  Logs:    tinyclaw logs [$channel_names|queue|daemon]"
     echo ""
 
     local ch_list
     ch_list=$(IFS=','; echo "${ACTIVE_CHANNELS[*]}")
-    log "Daemon started with $total_panes panes (channels=$ch_list)"
+    log "Daemon started (pid=$daemon_pid, channels=$ch_list)"
 }
 
 # Stop daemon
 stop_daemon() {
     log "Stopping TinyClaw..."
 
-    if session_exists; then
-        tmux kill-session -t "$TMUX_SESSION"
+    # Send SIGTERM to daemon process via PID file
+    if [ -f "$PID_FILE" ]; then
+        local pid
+        pid=$(cat "$PID_FILE")
+        if kill -0 "$pid" 2>/dev/null; then
+            kill "$pid"
+            # Wait up to 10 seconds for graceful shutdown
+            local waited=0
+            while kill -0 "$pid" 2>/dev/null && [ $waited -lt 10 ]; do
+                sleep 1
+                waited=$((waited + 1))
+            done
+            # Force kill if still alive
+            if kill -0 "$pid" 2>/dev/null; then
+                kill -9 "$pid" 2>/dev/null || true
+            fi
+        fi
+        rm -f "$PID_FILE"
     fi
 
-    # Kill any remaining channel processes
+    # Kill any remaining child processes
     for ch in "${ALL_CHANNELS[@]}"; do
-        pkill -f "${CHANNEL_SCRIPT[$ch]}" || true
+        pkill -f "${CHANNEL_SCRIPT[$ch]}" 2>/dev/null || true
     done
-    pkill -f "dist/queue-processor.js" || true
-    pkill -f "heartbeat-cron.sh" || true
+    pkill -f "dist/queue-processor.js" 2>/dev/null || true
+    pkill -f "heartbeat-cron.sh" 2>/dev/null || true
+    pkill -f "dist/daemon.js" 2>/dev/null || true
 
     echo -e "${GREEN}✓ TinyClaw stopped${NC}"
     log "Daemon stopped"
 }
 
-# Restart daemon safely even when called from inside TinyClaw's tmux session
+# Restart daemon
 restart_daemon() {
-    if session_exists && [ -n "${TMUX:-}" ]; then
-        local current_session
-        current_session=$(tmux display-message -p '#S' 2>/dev/null || true)
-        if [ "$current_session" = "$TMUX_SESSION" ]; then
-            local bash_bin
-            bash_bin=$(command -v bash)
-            log "Restart requested from inside tmux session; scheduling detached restart..."
-            nohup "$bash_bin" "$SCRIPT_DIR/tinyclaw.sh" __delayed_start >/dev/null 2>&1 &
-            stop_daemon
-            return
-        fi
-    fi
-
     stop_daemon
     sleep 2
     start_daemon
@@ -261,10 +160,11 @@ status_daemon() {
     echo ""
 
     if session_exists; then
-        echo -e "Tmux Session: ${GREEN}Running${NC}"
-        echo "  Attach: tmux attach -t $TMUX_SESSION"
+        local pid
+        pid=$(cat "$PID_FILE" 2>/dev/null)
+        echo -e "Daemon:          ${GREEN}Running${NC} (pid=$pid)"
     else
-        echo -e "Tmux Session: ${RED}Not Running${NC}"
+        echo -e "Daemon:          ${RED}Not Running${NC}"
         echo "  Start: tinyclaw start"
     fi
 

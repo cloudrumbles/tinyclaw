@@ -15,7 +15,7 @@ import path from 'path';
 import { MessageData, ResponseData, QueueFile, ChainStep, TeamConfig } from './lib/types';
 import {
     QUEUE_INCOMING, QUEUE_OUTGOING, QUEUE_PROCESSING,
-    LOG_FILE, RESET_FLAG, EVENTS_DIR, CHATS_DIR,
+    RESET_FLAG, EVENTS_DIR, CHATS_DIR,
     getSettings, getAgents, getTeams
 } from './lib/config';
 import { log, emitEvent } from './lib/logging';
@@ -23,7 +23,7 @@ import { parseAgentRouting, findTeamForAgent, getAgentResetFlag, extractTeammate
 import { invokeAgent } from './lib/invoke';
 
 // Ensure directories exist
-[QUEUE_INCOMING, QUEUE_OUTGOING, QUEUE_PROCESSING, path.dirname(LOG_FILE)].forEach(dir => {
+[QUEUE_INCOMING, QUEUE_OUTGOING, QUEUE_PROCESSING].forEach(dir => {
     if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
     }
