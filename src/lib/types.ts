@@ -23,7 +23,6 @@ export interface Settings {
     };
     channels?: {
         enabled?: string[];
-        discord?: { bot_token?: string };
         telegram?: { bot_token?: string };
     };
     models?: {

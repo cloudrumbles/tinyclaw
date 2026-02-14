@@ -19,27 +19,23 @@ echo ""
 
 # --- Channel registry ---
 # To add a new channel, add its ID here and fill in the config arrays below.
-ALL_CHANNELS=(telegram discord)
+ALL_CHANNELS=(telegram)
 
 declare -A CHANNEL_DISPLAY=(
     [telegram]="Telegram"
-    [discord]="Discord"
 )
 declare -A CHANNEL_TOKEN_KEY=(
-    [discord]="discord_bot_token"
     [telegram]="telegram_bot_token"
 )
 declare -A CHANNEL_TOKEN_PROMPT=(
-    [discord]="Enter your Discord bot token:"
     [telegram]="Enter your Telegram bot token:"
 )
 declare -A CHANNEL_TOKEN_HELP=(
-    [discord]="(Get one at: https://discord.com/developers/applications)"
     [telegram]="(Create a bot via @BotFather on Telegram to get a token)"
 )
 
 # Channel selection - simple checklist
-echo "Which messaging channels (Telegram, Discord) do you want to enable?"
+echo "Which messaging channels (Telegram) do you want to enable?"
 echo ""
 
 ENABLED_CHANNELS=()
@@ -262,7 +258,6 @@ done
 CHANNELS_JSON="${CHANNELS_JSON}]"
 
 # Build channel configs with tokens
-DISCORD_TOKEN="${TOKENS[discord]:-}"
 TELEGRAM_TOKEN="${TOKENS[telegram]:-}"
 
 # Write settings.json with layered structure
@@ -281,9 +276,6 @@ cat > "$SETTINGS_FILE" <<EOF
   },
   "channels": {
     "enabled": ${CHANNELS_JSON},
-    "discord": {
-      "bot_token": "${DISCORD_TOKEN}"
-    },
     "telegram": {
       "bot_token": "${TELEGRAM_TOKEN}"
     }

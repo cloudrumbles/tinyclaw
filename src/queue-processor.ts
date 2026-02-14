@@ -15,7 +15,7 @@ import path from 'path';
 import { MessageData, ResponseData, QueueFile, ChainStep, TeamConfig } from './lib/types';
 import {
     QUEUE_INCOMING, QUEUE_OUTGOING, QUEUE_PROCESSING,
-    RESET_FLAG, EVENTS_DIR, CHATS_DIR,
+    RESET_FLAG, CHATS_DIR,
     getSettings, getAgents, getTeams
 } from './lib/config';
 import { log, emitEvent } from './lib/logging';
@@ -490,11 +490,6 @@ function logAgentConfig(): void {
             log('INFO', `  ${id}: ${team.name} [agents: ${team.agents.join(', ')}] leader=${team.leader_agent}`);
         }
     }
-}
-
-// Ensure events dir exists
-if (!fs.existsSync(EVENTS_DIR)) {
-    fs.mkdirSync(EVENTS_DIR, { recursive: true });
 }
 
 // Main loop

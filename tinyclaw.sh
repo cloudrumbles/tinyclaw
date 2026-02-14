@@ -301,40 +301,20 @@ case "${1:-}" in
                 fi
                 team_show "$3"
                 ;;
-            visualize|viz)
-                # Build visualizer if needed
-                if [ ! -f "$SCRIPT_DIR/dist/visualizer/team-visualizer.js" ] || \
-                   [ "$SCRIPT_DIR/src/visualizer/team-visualizer.tsx" -nt "$SCRIPT_DIR/dist/visualizer/team-visualizer.js" ]; then
-                    echo -e "${BLUE}Building team visualizer...${NC}"
-                    cd "$SCRIPT_DIR" && bun run build:visualizer 2>/dev/null
-                    if [ $? -ne 0 ]; then
-                        echo -e "${RED}Failed to build visualizer.${NC}"
-                        exit 1
-                    fi
-                fi
-                if [ -n "$3" ]; then
-                    bun "$SCRIPT_DIR/dist/visualizer/team-visualizer.js" --team "$3"
-                else
-                    bun "$SCRIPT_DIR/dist/visualizer/team-visualizer.js"
-                fi
-                ;;
             *)
-                echo "Usage: $0 team {list|add|remove|show|visualize}"
+                echo "Usage: $0 team {list|add|remove|show}"
                 echo ""
                 echo "Team Commands:"
                 echo "  list                   List all configured teams"
                 echo "  add                    Add a new team interactively"
                 echo "  remove <id>            Remove a team"
                 echo "  show <id>              Show team configuration"
-                echo "  visualize [team_id]    Live TUI dashboard for team collaboration"
                 echo ""
                 echo "Examples:"
                 echo "  $0 team list"
                 echo "  $0 team add"
                 echo "  $0 team show dev"
                 echo "  $0 team remove dev"
-                echo "  $0 team visualize"
-                echo "  $0 team visualize dev"
                 echo ""
                 echo "In chat, use '@team_id message' to route to a team's leader agent."
                 echo "Agents can collaborate by mentioning @teammate in responses."
