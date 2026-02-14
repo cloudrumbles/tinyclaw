@@ -28,7 +28,7 @@
 - ✅ **Live TUI dashboard** - Real-time team visualizer for monitoring agent chains
 - ✅ **Persistent sessions** - Conversation context maintained across restarts
 - ✅ **File-based queue** - No race conditions, reliable message handling
-- ✅ **24/7 operation** - Runs in tmux for always-on availability
+- ✅ **24/7 operation** - Background daemon with automatic process recovery
 
 ## 🚀 Quick Start
 
@@ -36,7 +36,6 @@
 
 - macOS or Linux
 - Node.js v14+
-- tmux
 - Bash 4.0+ (macOS: `brew install bash`)
 - [Claude Code CLI](https://claude.com/claude-code) (for Anthropic provider)
 - [Codex CLI](https://docs.openai.com/codex) (for OpenAI provider)
@@ -127,7 +126,6 @@ Commands work with `tinyclaw` (if CLI installed) or `./tinyclaw.sh` (direct scri
 | `status`      | Show current status and activity                          | `tinyclaw status`     |
 | `setup`       | Run setup wizard (reconfigure)                            | `tinyclaw setup`      |
 | `logs [type]` | View logs (discord/telegram/whatsapp/queue/heartbeat/all) | `tinyclaw logs queue` |
-| `attach`      | Attach to tmux session                                    | `tinyclaw attach`     |
 
 ### Agent Commands
 

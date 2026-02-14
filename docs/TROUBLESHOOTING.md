@@ -89,12 +89,7 @@ tinyclaw setup
 
 ### QR code not showing
 
-```bash
-# Attach to tmux to see the QR code
-tmux attach -t tinyclaw
-```
-
-The QR code appears in the WhatsApp pane. If it's not visible:
+The QR code is printed to the WhatsApp client's log. If it's not visible:
 1. Check if WhatsApp is enabled: `cat .tinyclaw/settings.json | jq '.channels.enabled'`
 2. Check WhatsApp process: `pgrep -f whatsapp-client.ts`
 3. View logs: `tail -f .tinyclaw/logs/whatsapp.log`
