@@ -37,12 +37,8 @@ command_exists() {
 echo -e "${BLUE}[1/6] Checking dependencies...${NC}"
 MISSING_DEPS=()
 
-if ! command_exists node; then
-    MISSING_DEPS+=("node")
-fi
-
-if ! command_exists npm; then
-    MISSING_DEPS+=("npm")
+if ! command_exists bun; then
+    MISSING_DEPS+=("bun")
 fi
 
 if ! command_exists tmux; then
@@ -60,7 +56,7 @@ if [ ${#MISSING_DEPS[@]} -ne 0 ]; then
     done
     echo ""
     echo "Install instructions:"
-    echo "  - Node.js/npm: https://nodejs.org/"
+    echo "  - Bun: https://bun.sh/"
     echo "  - tmux: sudo apt install tmux (or brew install tmux)"
     echo "  - Claude Code: https://claude.com/claude-code"
     echo ""
@@ -152,14 +148,14 @@ if [ "$USE_BUNDLE" = false ]; then
     echo -e "${BLUE}[5/6] Installing dependencies...${NC}"
     cd "$INSTALL_DIR"
 
-    echo "Running npm install (this may take a few minutes)..."
-    PUPPETEER_SKIP_DOWNLOAD=true npm install --silent
+    echo "Running bun install..."
+    PUPPETEER_SKIP_DOWNLOAD=true bun install
 
     echo "Building TypeScript..."
-    npm run build --silent
+    bun run build
 
     echo "Pruning development dependencies..."
-    npm prune --omit=dev --silent
+    rm -rf node_modules && PUPPETEER_SKIP_DOWNLOAD=true bun install --production
 
     echo -e "${GREEN}✓ Dependencies installed${NC}"
     echo ""

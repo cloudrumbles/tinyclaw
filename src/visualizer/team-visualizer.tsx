@@ -1,11 +1,11 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Team Visualizer — Real-time TUI for watching team collaboration chains.
  *
  * Watches ~/.tinyclaw/events/ for structured JSON events emitted by the
  * queue processor and renders a live dashboard with Ink (React for CLI).
  *
- * Usage:  node dist/team-visualizer.js [--team <id>]
+ * Usage:  bun dist/team-visualizer.js [--team <id>]
  */
 
 import React, { useState, useEffect, useCallback } from 'react';

@@ -11,11 +11,11 @@ start_daemon() {
 
     log "Starting TinyClaw daemon..."
 
-    # Check if Node.js dependencies are installed
+    # Check if dependencies are installed
     if [ ! -d "$SCRIPT_DIR/node_modules" ]; then
-        echo -e "${YELLOW}Installing Node.js dependencies...${NC}"
+        echo -e "${YELLOW}Installing dependencies...${NC}"
         cd "$SCRIPT_DIR"
-        PUPPETEER_SKIP_DOWNLOAD=true npm install
+        PUPPETEER_SKIP_DOWNLOAD=true bun install
     fi
 
     # Build TypeScript if any src file is newer than its dist counterpart
@@ -34,7 +34,7 @@ start_daemon() {
     if [ "$needs_build" = true ]; then
         echo -e "${YELLOW}Building TypeScript...${NC}"
         cd "$SCRIPT_DIR"
-        npm run build
+        bun run build
     fi
 
     # Load settings or run setup wizard
@@ -112,13 +112,13 @@ start_daemon() {
     local whatsapp_pane=-1
     for ch in "${ACTIVE_CHANNELS[@]}"; do
         [ "$ch" = "whatsapp" ] && whatsapp_pane=$pane_idx
-        tmux send-keys -t "$TMUX_SESSION:0.$pane_idx" "cd '$SCRIPT_DIR' && node ${CHANNEL_SCRIPT[$ch]}" C-m
+        tmux send-keys -t "$TMUX_SESSION:0.$pane_idx" "cd '$SCRIPT_DIR' && bun ${CHANNEL_SCRIPT[$ch]}" C-m
         tmux select-pane -t "$TMUX_SESSION:0.$pane_idx" -T "${CHANNEL_DISPLAY[$ch]}"
         pane_idx=$((pane_idx + 1))
     done
 
     # Queue pane
-    tmux send-keys -t "$TMUX_SESSION:0.$pane_idx" "cd '$SCRIPT_DIR' && node dist/queue-processor.js" C-m
+    tmux send-keys -t "$TMUX_SESSION:0.$pane_idx" "cd '$SCRIPT_DIR' && bun dist/queue-processor.js" C-m
     tmux select-pane -t "$TMUX_SESSION:0.$pane_idx" -T "Queue"
     pane_idx=$((pane_idx + 1))
 
