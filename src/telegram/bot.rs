@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use axum::extract::Path as AxumPath;
 use teloxide::net::Download;
 use teloxide::prelude::*;
 use teloxide::types::{
@@ -32,7 +33,7 @@ struct PendingMessage {
 pub async fn run_telegram(
     tinyclaw_home: PathBuf,
     bot_token: String,
-    webhook_url: String,
+    webhook_url: Option<String>,
     incoming_tx: mpsc::Sender<IncomingMessage>,
     mut outgoing_rx: mpsc::Receiver<OutgoingMessage>,
 ) {
@@ -94,6 +95,7 @@ pub async fn run_telegram(
     let pairing_file = Arc::new(pairing_file);
     let settings_file = Arc::new(settings_file);
     let tinyclaw_home = Arc::new(tinyclaw_home);
+    let cron_home = tinyclaw_home.clone();
     let bot_clone = bot.clone();
 
     let handler = Update::filter_message().endpoint(
@@ -125,19 +127,52 @@ pub async fn run_telegram(
         .enable_ctrlc_handler()
         .build();
 
-    let addr = ([0, 0, 0, 0], 8080).into();
-    let url: reqwest::Url = webhook_url.parse().expect("invalid WEBHOOK_URL");
-    let listener = webhooks::axum(bot.clone(), webhooks::Options::new(addr, url))
-        .await
-        .expect("Failed to set up webhook");
+    if let Some(ref url) = webhook_url {
+        let port: u16 = std::env::var("WEBHOOK_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(3000);
+        let addr = ([0, 0, 0, 0], port).into();
+        let url: reqwest::Url = url.parse().expect("invalid WEBHOOK_URL");
+        let (listener, stop_flag, tg_router) =
+            webhooks::axum_to_router(bot.clone(), webhooks::Options::new(addr, url))
+                .await
+                .expect("Failed to set up webhook");
 
-    info!("Webhook listener started on 0.0.0.0:8080");
-    dispatcher
-        .dispatch_with_listener(
-            listener,
-            LoggingErrorHandler::with_custom_text("Webhook error"),
-        )
-        .await;
+        // Add /cron/{job_id} route for cron-job.org triggers
+        let app = tg_router.route(
+            "/cron/{job_id}",
+            axum::routing::get({
+                let home = cron_home;
+                move |AxumPath(job_id): AxumPath<String>| {
+                    let home = home.clone();
+                    async move { handle_cron_trigger(&home, &job_id) }
+                }
+            }),
+        );
+
+        // Start HTTP server with graceful shutdown
+        let tcp = tokio::net::TcpListener::bind(addr)
+            .await
+            .expect("Failed to bind webhook listener");
+        tokio::spawn(async move {
+            axum::serve(tcp, app)
+                .with_graceful_shutdown(stop_flag)
+                .await
+                .ok();
+        });
+
+        info!("Webhook listener started on 0.0.0.0:{}", port);
+        dispatcher
+            .dispatch_with_listener(
+                listener,
+                LoggingErrorHandler::with_custom_text("Webhook error"),
+            )
+            .await;
+    } else {
+        info!("No WEBHOOK_URL set, using long polling");
+        dispatcher.dispatch().await;
+    }
 
     outgoing_handle.abort();
     cleanup_handle.abort();
@@ -764,4 +799,62 @@ fn now_millis() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+/// Handle GET /cron/:job_id — triggered by cron-job.org.
+/// Reads job config from cron-jobs.json, writes a trigger file to cron-inbox/.
+fn handle_cron_trigger(
+    tinyclaw_home: &Path,
+    job_id: &str,
+) -> (axum::http::StatusCode, &'static str) {
+    let jobs_file = tinyclaw_home.join("cron-jobs.json");
+
+    let jobs: serde_json::Value = match std::fs::read_to_string(&jobs_file) {
+        Ok(data) => match serde_json::from_str(&data) {
+            Ok(v) => v,
+            Err(_) => return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Bad jobs file"),
+        },
+        Err(_) => return (axum::http::StatusCode::NOT_FOUND, "No jobs configured"),
+    };
+
+    let job = match jobs.get("jobs").and_then(|j| j.get(job_id)) {
+        Some(j) => j,
+        None => return (axum::http::StatusCode::NOT_FOUND, "Job not found"),
+    };
+
+    let name = job.get("name").and_then(|n| n.as_str()).unwrap_or("Cron Job");
+    let agent_id = job.get("agent_id").and_then(|a| a.as_str()).unwrap_or("sultana");
+    let prompt = job.get("prompt").and_then(|p| p.as_str()).unwrap_or("");
+
+    // chat_id may be stored as string or number
+    let chat_id: Option<i64> = job
+        .get("chat_id")
+        .and_then(|c| c.as_i64().or_else(|| c.as_str().and_then(|s| s.parse().ok())));
+
+    let mut trigger = serde_json::json!({
+        "name": name,
+        "agent_id": agent_id,
+        "job_id": job_id,
+        "prompt": prompt,
+    });
+    if let Some(cid) = chat_id {
+        trigger["chat_id"] = serde_json::json!(cid);
+    }
+
+    // Write trigger file atomically to cron-inbox
+    let inbox_dir = tinyclaw_home.join("cron-inbox");
+    let trigger_file = inbox_dir.join(format!("{job_id}.json"));
+    let tmp = inbox_dir.join(format!("{job_id}.json.tmp"));
+
+    let Ok(data) = serde_json::to_string_pretty(&trigger) else {
+        return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Serialize failed");
+    };
+
+    if std::fs::write(&tmp, &data).is_err() {
+        return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Write failed");
+    }
+    std::fs::rename(&tmp, &trigger_file).ok();
+
+    info!("Cron trigger: {job_id} ({name}) -> @{agent_id}");
+    (axum::http::StatusCode::OK, "OK")
 }

@@ -34,19 +34,24 @@ pub async fn run_queue_processor(
         let skills = skills_source.clone();
 
         tokio::spawn(async move {
+            let t0 = std::time::Instant::now();
+
             // Peek at the target agent to determine which lock to acquire
             let settings = config::get_settings(&home);
             let agents = config::get_agents(&settings);
             let teams = config::get_teams(&settings);
 
             let target_agent = peek_agent_id(&msg, &agents, &teams);
+            info!("[timing] config+peek: {:?}", t0.elapsed());
 
             // Acquire per-agent semaphore (sequential processing per agent)
             let sem = locks
                 .entry(target_agent.clone())
                 .or_insert_with(|| Arc::new(Semaphore::new(1)))
                 .clone();
+            let t1 = std::time::Instant::now();
             let _permit = sem.acquire().await.unwrap();
+            info!("[timing] semaphore wait: {:?}", t1.elapsed());
 
             // Send typing start
             if let Some(chat_id) = msg.chat_id {
@@ -58,7 +63,9 @@ pub async fn run_queue_processor(
                     .await;
             }
 
+            let t2 = std::time::Instant::now();
             let result = process_message(&home, skills.as_deref(), &msg).await;
+            info!("[timing] process_message: {:?}", t2.elapsed());
 
             // Send typing stop
             let _ = tx
@@ -180,7 +187,7 @@ async fn process_message(
             .find(|(_, t)| t.leader_agent == agent_id && t.agents.contains(&agent_id))
             .map(|(id, t)| (id.clone(), t.clone()))
     } else {
-        find_team_for_agent(&agent_id, &teams).map(|(id, t)| (id.clone(), t.clone()))
+        find_team_for_agent(&agent_id, &teams).map(|(id, t): (&String, &TeamConfig)| (id.clone(), t.clone()))
     };
 
     // Check reset flags
@@ -215,6 +222,10 @@ async fn process_message(
         .await
         {
             Ok(resp) => resp,
+            Err(crate::errors::InvokeError::Timeout(secs, _)) => {
+                error!("Agent timeout ({agent_id}): {secs}s");
+                "Sorry, the request timed out. Please try again.".into()
+            }
             Err(e) => {
                 error!("Agent error ({agent_id}): {e}");
                 "Sorry, I encountered an error processing your request. Please check the logs."

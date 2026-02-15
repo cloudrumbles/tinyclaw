@@ -3,35 +3,40 @@
 # deploy-sprite.sh — Deploy TinyClaw (Rust) to a Sprite VM
 # =============================================================================
 #
-# Uses the Sprites HTTP API + Backblaze B2 for file transfer.
+# Uses the Sprites HTTP API + filesystem API for file transfer (no B2 needed).
 #
 # Flow:
 #   1. Build Rust binary locally
-#   2. Upload tarball to B2, sprite downloads it (exec API can't handle binary)
-#   3. Write configs via exec API (base64-encoded to avoid quoting issues)
-#   4. Create service via sprite-env on the VM
+#   2. Upload tarball via Sprites filesystem API
+#   3. Extract + install claude CLI on sprite
+#   4. Write configs via exec API (base64-encoded to avoid quoting issues)
+#   5. Create service via sprite-env with --http-port (wake-on-request)
+#   6. Checkpoint for rollback
 #
 # Prerequisites:
 #   - cargo installed locally
-#   - SPRITES_TOKEN env var (API token from sprites.dev)
-#   - B2_KEY_ID + B2_APP_KEY env vars (Backblaze B2 credentials)
-#   - A Sprite VM already created
+#   - .env file with: SPRITES_TOKEN, TELEGRAM_BOT_TOKEN, CLAUDE_CODE_OAUTH_TOKEN
+#   - Optional: B2_KEY_ID, B2_APP_KEY (no longer needed for deploy)
 #
 # Usage:
-#   ./scripts/deploy-sprite.sh <sprite-name> \
-#       --telegram-token <token> \
-#       --claude-token <token> \
-#       --webhook-url <url> \
-#       [--agent-name <name>]   \
-#       [--agent-id <id>]       \
-#       [--model <model>]       \
-#       [--pair-telegram <user_id:display_name>]
+#   ./scripts/deploy-sprite.sh <sprite-name> [options]
+#
+# Tokens are read from .env by default. CLI flags override .env values.
+# Webhook URL is auto-derived from the sprite's public URL.
+#
+# Options:
+#   --telegram-token <token>   Override TELEGRAM_BOT_TOKEN from .env
+#   --claude-token <token>     Override CLAUDE_CODE_OAUTH_TOKEN from .env
+#   --webhook-url <url>        Override auto-derived webhook URL
+#   --agent-name <name>        Agent display name (default: Assistant)
+#   --agent-id <id>            Agent ID (default: assistant)
+#   --model <model>            Claude model shortname (default: opus)
+#   --pair-telegram <uid:name> Pre-approve a Telegram user
+#   --skip-build               Skip cargo build (use existing binary)
+#   --skip-claude-install      Skip installing claude CLI on sprite
 #
 # Example:
 #   ./scripts/deploy-sprite.sh sultana \
-#       --telegram-token "6353795033:AAF..." \
-#       --claude-token "sk-ant-oat01-..." \
-#       --webhook-url "https://sultana-bmewf.sprites.app/webhook" \
 #       --agent-name "Sultana" \
 #       --agent-id sultana \
 #       --model opus \
@@ -41,7 +46,6 @@
 set -euo pipefail
 
 SPRITES_API="https://api.sprites.dev/v1"
-B2_API="https://api.backblazeb2.com"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -55,7 +59,7 @@ ok() { echo -e "${GREEN}✓${NC} $1"; }
 warn() { echo -e "${YELLOW}!${NC} $1"; }
 
 # ---------------------------------------------------------------------------
-# Sprites API helper — run a script on the sprite via stdin to bash
+# Sprites API helpers
 # ---------------------------------------------------------------------------
 sprite_run() {
     local script_file
@@ -65,7 +69,7 @@ sprite_run() {
     response=$(curl -sS -w "\n%{http_code}" -X POST \
         -H "Authorization: Bearer $SPRITES_TOKEN" \
         --data-binary @"$script_file" \
-        "${SPRITES_API}/sprites/${SPRITE_NAME}/exec?cmd=bash&stdin=true")
+        "${SPRITES_API}/sprites/${SPRITE_NAME}/exec?cmd=bash&stdin=true" | tr -d '\0')
     rm -f "$script_file"
     local http_code body
     http_code=$(echo "$response" | tail -1)
@@ -74,6 +78,22 @@ sprite_run() {
         die "sprite exec failed (HTTP $http_code): $body"
     fi
     echo "$body"
+}
+
+sprite_upload() {
+    local local_path="$1"
+    local remote_path="$2"
+    local response
+    response=$(curl -sS -w "\n%{http_code}" -X PUT \
+        -H "Authorization: Bearer $SPRITES_TOKEN" \
+        -H "Content-Type: application/octet-stream" \
+        --data-binary @"$local_path" \
+        "${SPRITES_API}/sprites/${SPRITE_NAME}/fs/write?path=${remote_path}&mkdir=true")
+    local http_code
+    http_code=$(echo "$response" | tail -1)
+    if [ "$http_code" -ge 400 ] 2>/dev/null; then
+        die "fs upload failed (HTTP $http_code): $(echo "$response" | sed '$d')"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -89,54 +109,114 @@ REMOTE_CONFIG="$REMOTE_HOME/.tinyclaw"
 REMOTE_WORKSPACE="$REMOTE_HOME/tinyclaw-workspace"
 
 # ---------------------------------------------------------------------------
+# Load .env defaults
+# ---------------------------------------------------------------------------
+
+if [ -f "$PROJECT_ROOT/.env" ]; then
+    set -a
+    # shellcheck source=/dev/null
+    source "$PROJECT_ROOT/.env"
+    set +a
+fi
+
+# ---------------------------------------------------------------------------
 # Parse arguments
 # ---------------------------------------------------------------------------
 
 SPRITE_NAME="${1:-}"
-[ -z "$SPRITE_NAME" ] && die "Usage: $0 <sprite-name> --telegram-token <t> --claude-token <t> --webhook-url <url> [options]"
+[ -z "$SPRITE_NAME" ] && die "Usage: $0 <sprite-name> [options]"
 shift
 
-TELEGRAM_TOKEN=""
-CLAUDE_TOKEN=""
+TELEGRAM_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
+CLAUDE_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"
 WEBHOOK_URL=""
 AGENT_NAME="Assistant"
 AGENT_ID="assistant"
 MODEL="opus"
 PAIR_TELEGRAM=""
+SKIP_BUILD=false
+SKIP_CLAUDE_INSTALL=false
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --telegram-token) TELEGRAM_TOKEN="$2"; shift 2 ;;
-        --claude-token)   CLAUDE_TOKEN="$2"; shift 2 ;;
-        --webhook-url)    WEBHOOK_URL="$2"; shift 2 ;;
-        --agent-name)     AGENT_NAME="$2"; shift 2 ;;
-        --agent-id)       AGENT_ID="$2"; shift 2 ;;
-        --model)          MODEL="$2"; shift 2 ;;
-        --pair-telegram)  PAIR_TELEGRAM="$2"; shift 2 ;;
+        --telegram-token)      TELEGRAM_TOKEN="$2"; shift 2 ;;
+        --claude-token)        CLAUDE_TOKEN="$2"; shift 2 ;;
+        --webhook-url)         WEBHOOK_URL="$2"; shift 2 ;;
+        --agent-name)          AGENT_NAME="$2"; shift 2 ;;
+        --agent-id)            AGENT_ID="$2"; shift 2 ;;
+        --model)               MODEL="$2"; shift 2 ;;
+        --pair-telegram)       PAIR_TELEGRAM="$2"; shift 2 ;;
+        --skip-build)          SKIP_BUILD=true; shift ;;
+        --skip-claude-install) SKIP_CLAUDE_INSTALL=true; shift ;;
         *) die "Unknown option: $1" ;;
     esac
 done
 
-[ -z "$TELEGRAM_TOKEN" ] && die "--telegram-token is required"
-[ -z "$CLAUDE_TOKEN" ]   && die "--claude-token is required"
-[ -z "$WEBHOOK_URL" ]    && die "--webhook-url is required"
+[ -z "$TELEGRAM_TOKEN" ] && die "TELEGRAM_BOT_TOKEN not set in .env and --telegram-token not provided"
+[ -z "$CLAUDE_TOKEN" ]   && die "CLAUDE_CODE_OAUTH_TOKEN not set in .env and --claude-token not provided"
 : "${SPRITES_TOKEN:?SPRITES_TOKEN env var is required}"
-: "${B2_KEY_ID:?B2_KEY_ID env var is required}"
-: "${B2_APP_KEY:?B2_APP_KEY env var is required}"
 
 # ---------------------------------------------------------------------------
 # Step 1: Build Rust binary
 # ---------------------------------------------------------------------------
 
-info "Building Rust binary (release)..."
-cd "$PROJECT_ROOT"
-cargo build --release || die "cargo build failed"
+if [ "$SKIP_BUILD" = true ]; then
+    info "Skipping build (--skip-build)"
+else
+    info "Building Rust binary (release)..."
+    cd "$PROJECT_ROOT"
+    cargo build --release || die "cargo build failed"
+fi
+
 BINARY="$PROJECT_ROOT/target/release/tinyclaw"
 [ -f "$BINARY" ] || die "Binary not found at $BINARY"
-ok "Binary built ($(du -h "$BINARY" | cut -f1))"
+ok "Binary ready ($(du -h "$BINARY" | cut -f1))"
 
 # ---------------------------------------------------------------------------
-# Step 2: Create tarball
+# Step 2: Ensure sprite exists + set public URL
+# ---------------------------------------------------------------------------
+
+info "Checking sprite '$SPRITE_NAME'..."
+
+SPRITE_INFO=$(curl -sS -w "\n%{http_code}" \
+    -H "Authorization: Bearer $SPRITES_TOKEN" \
+    "${SPRITES_API}/sprites/${SPRITE_NAME}")
+SPRITE_HTTP=$(echo "$SPRITE_INFO" | tail -1)
+SPRITE_BODY=$(echo "$SPRITE_INFO" | sed '$d')
+
+if [ "$SPRITE_HTTP" = "404" ]; then
+    info "Sprite not found, creating '$SPRITE_NAME'..."
+    CREATE_RESULT=$(curl -sS -X POST \
+        -H "Authorization: Bearer $SPRITES_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "{\"name\":\"$SPRITE_NAME\"}" \
+        "${SPRITES_API}/sprites")
+    SPRITE_URL=$(echo "$CREATE_RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin)['url'])")
+    ok "Sprite created: $SPRITE_URL"
+elif [ "$SPRITE_HTTP" -ge 400 ] 2>/dev/null; then
+    die "Failed to check sprite (HTTP $SPRITE_HTTP): $SPRITE_BODY"
+else
+    SPRITE_URL=$(echo "$SPRITE_BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['url'])")
+    ok "Sprite exists: $SPRITE_URL"
+fi
+
+# Set URL auth to public (required for Telegram webhooks)
+info "Setting URL auth to public..."
+curl -sS -X PUT \
+    -H "Authorization: Bearer $SPRITES_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"url_settings":{"auth":"public"}}' \
+    "${SPRITES_API}/sprites/${SPRITE_NAME}" > /dev/null
+ok "URL auth set to public"
+
+# Auto-derive webhook URL if not provided
+if [ -z "$WEBHOOK_URL" ]; then
+    WEBHOOK_URL="${SPRITE_URL}/webhook"
+fi
+ok "Webhook URL: $WEBHOOK_URL"
+
+# ---------------------------------------------------------------------------
+# Step 3: Create tarball + upload via filesystem API
 # ---------------------------------------------------------------------------
 
 info "Creating deployment tarball..."
@@ -155,71 +235,17 @@ tar czf "$TARBALL" -C "$STAGING" tinyclaw
 rm -rf "$STAGING"
 ok "Tarball created ($(du -h "$TARBALL" | cut -f1))"
 
-# ---------------------------------------------------------------------------
-# Step 3: Upload tarball to B2
-# ---------------------------------------------------------------------------
-
-info "Uploading tarball to Backblaze B2..."
-
-# Authorize with B2
-B2_AUTH=$(curl -sS "$B2_API/b2api/v3/b2_authorize_account" \
-    -u "${B2_KEY_ID}:${B2_APP_KEY}")
-B2_API_URL=$(echo "$B2_AUTH" | python3 -c "import sys,json; print(json.load(sys.stdin)['apiInfo']['storageApi']['apiUrl'])")
-B2_AUTH_TOKEN=$(echo "$B2_AUTH" | python3 -c "import sys,json; print(json.load(sys.stdin)['authorizationToken'])")
-B2_DOWNLOAD_URL=$(echo "$B2_AUTH" | python3 -c "import sys,json; print(json.load(sys.stdin)['apiInfo']['storageApi']['downloadUrl'])")
-
-# Find or detect the B2 bucket (use first available bucket)
-B2_BUCKETS=$(curl -sS -X POST \
-    -H "Authorization: $B2_AUTH_TOKEN" \
-    -d "{\"accountId\":\"$(echo "$B2_AUTH" | python3 -c "import sys,json; print(json.load(sys.stdin)['accountId'])")\"}" \
-    "$B2_API_URL/b2api/v3/b2_list_buckets")
-B2_BUCKET_ID=$(echo "$B2_BUCKETS" | python3 -c "import sys,json; print(json.load(sys.stdin)['buckets'][0]['bucketId'])")
-B2_BUCKET_NAME=$(echo "$B2_BUCKETS" | python3 -c "import sys,json; print(json.load(sys.stdin)['buckets'][0]['bucketName'])")
-
-# Get upload URL
-UPLOAD_INFO=$(curl -sS -X POST \
-    -H "Authorization: $B2_AUTH_TOKEN" \
-    -d "{\"bucketId\":\"$B2_BUCKET_ID\"}" \
-    "$B2_API_URL/b2api/v3/b2_get_upload_url")
-UPLOAD_URL=$(echo "$UPLOAD_INFO" | python3 -c "import sys,json; print(json.load(sys.stdin)['uploadUrl'])")
-UPLOAD_TOKEN=$(echo "$UPLOAD_INFO" | python3 -c "import sys,json; print(json.load(sys.stdin)['authorizationToken'])")
-
-# Upload
-SHA1=$(sha1sum "$TARBALL" | cut -d' ' -f1)
-UPLOAD_RESULT=$(curl -sS -X POST \
-    -H "Authorization: $UPLOAD_TOKEN" \
-    -H "X-Bz-File-Name: tinyclaw-deploy.tar.gz" \
-    -H "Content-Type: application/gzip" \
-    -H "X-Bz-Content-Sha1: $SHA1" \
-    --data-binary @"$TARBALL" \
-    "$UPLOAD_URL")
-B2_FILE_ID=$(echo "$UPLOAD_RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin)['fileId'])")
-
-# Get temporary download authorization (1 hour)
-DL_AUTH=$(curl -sS -X POST \
-    -H "Authorization: $B2_AUTH_TOKEN" \
-    -d "{\"bucketId\":\"$B2_BUCKET_ID\",\"fileNamePrefix\":\"tinyclaw-deploy.tar.gz\",\"validDurationInSeconds\":3600}" \
-    "$B2_API_URL/b2api/v3/b2_get_download_authorization")
-DL_TOKEN=$(echo "$DL_AUTH" | python3 -c "import sys,json; print(json.load(sys.stdin)['authorizationToken'])")
-DOWNLOAD_LINK="${B2_DOWNLOAD_URL}/file/${B2_BUCKET_NAME}/tinyclaw-deploy.tar.gz?Authorization=${DL_TOKEN}"
-
+info "Uploading tarball to sprite via filesystem API..."
+sprite_upload "$TARBALL" "/tmp/tinyclaw-deploy.tar.gz"
 rm -f "$TARBALL"
-ok "Tarball uploaded to B2 (bucket: $B2_BUCKET_NAME)"
+ok "Tarball uploaded"
 
-# ---------------------------------------------------------------------------
-# Step 4: Check sprite + download tarball on sprite
-# ---------------------------------------------------------------------------
-
-info "Checking sprite '$SPRITE_NAME'..."
-sprite_run "echo ok" > /dev/null || die "Cannot reach sprite '$SPRITE_NAME'"
-ok "Sprite is reachable"
-
-info "Downloading tarball on sprite from B2..."
+# Wake sprite + extract tarball
+info "Extracting on sprite..."
 sprite_run "
 set -e
 rm -rf ${REMOTE_TINYCLAW}
 mkdir -p ${REMOTE_HOME}
-curl -sS -o /tmp/tinyclaw-deploy.tar.gz '${DOWNLOAD_LINK}'
 cd ${REMOTE_HOME} && tar xzf /tmp/tinyclaw-deploy.tar.gz
 rm /tmp/tinyclaw-deploy.tar.gz
 chmod +x ${REMOTE_TINYCLAW}/tinyclaw
@@ -227,11 +253,27 @@ echo DONE
 " > /dev/null
 ok "Code deployed to sprite"
 
-# Clean up B2 file
-curl -sS -X POST \
-    -H "Authorization: $B2_AUTH_TOKEN" \
-    -d "{\"fileName\":\"tinyclaw-deploy.tar.gz\",\"fileId\":\"$B2_FILE_ID\"}" \
-    "$B2_API_URL/b2api/v3/b2_delete_file_version" > /dev/null 2>&1 || true
+# ---------------------------------------------------------------------------
+# Step 4: Install claude CLI on sprite
+# ---------------------------------------------------------------------------
+
+if [ "$SKIP_CLAUDE_INSTALL" = true ]; then
+    info "Skipping claude CLI install (--skip-claude-install)"
+else
+    info "Checking claude CLI on sprite..."
+    CLAUDE_CHECK=$(sprite_run "which claude 2>/dev/null && claude --version 2>/dev/null || echo NOT_FOUND" || true)
+    if echo "$CLAUDE_CHECK" | grep -q "NOT_FOUND"; then
+        info "Installing claude CLI on sprite..."
+        sprite_run "
+set -e
+curl -fsSL https://cli.anthropic.com/install.sh | sh
+echo DONE
+" > /dev/null
+        ok "Claude CLI installed"
+    else
+        ok "Claude CLI already installed"
+    fi
+fi
 
 # ---------------------------------------------------------------------------
 # Step 5: Remote setup (dirs, wrapper, configs)
@@ -242,7 +284,7 @@ info "Running remote setup..."
 # Dirs + wrapper script
 sprite_run "
 set -e
-mkdir -p ${REMOTE_CONFIG}/{logs,files,chats}
+mkdir -p ${REMOTE_CONFIG}/{logs,files,chats,cron-inbox}
 mkdir -p ${REMOTE_WORKSPACE}/${AGENT_ID}
 printf '%s\n' '#!/bin/bash' 'cd /home/sprite/tinyclaw' 'set -a; source .env; set +a' 'exec ./tinyclaw 2>&1' > ${REMOTE_TINYCLAW}/run.sh
 chmod +x ${REMOTE_TINYCLAW}/run.sh
@@ -311,10 +353,10 @@ sprite_run "
 set -e
 sprite-env services stop tinyclaw 2>/dev/null || true
 sprite-env services delete tinyclaw 2>/dev/null || true
-sprite-env services create tinyclaw --cmd bash --args '${REMOTE_TINYCLAW}/run.sh' --no-stream
+sprite-env services create tinyclaw --cmd bash --args '${REMOTE_TINYCLAW}/run.sh' --http-port 8080 --no-stream
 echo DONE
 " > /dev/null
-ok "Service created and started"
+ok "Service created with --http-port 8080 (wake-on-request enabled)"
 
 # ---------------------------------------------------------------------------
 # Step 7: Verify
@@ -327,17 +369,26 @@ LOGS=$(sprite_run "cat /.sprite/logs/services/tinyclaw.log 2>/dev/null | tail -2
 if echo "$LOGS" | grep -q "Webhook listener started"; then
     ok "TinyClaw is running with webhook on port 8080!"
 elif echo "$LOGS" | grep -q "TinyClaw starting"; then
-    ok "TinyClaw is running!"
+    ok "TinyClaw is running (webhook may still be starting)..."
 else
     warn "Service may still be starting — check logs"
 fi
+
+# ---------------------------------------------------------------------------
+# Step 8: Checkpoint
+# ---------------------------------------------------------------------------
+
+info "Creating deployment checkpoint..."
+sprite_run "sprite-env checkpoints create --comment 'deploy $(date +%Y%m%d-%H%M%S)' 2>&1" > /dev/null
+ok "Checkpoint created"
 
 echo ""
 echo -e "${GREEN}=== Deployment complete ===${NC}"
 echo ""
 echo "  Sprite:      $SPRITE_NAME"
+echo "  URL:         $SPRITE_URL"
 echo "  Agent:       $AGENT_NAME ($AGENT_ID) [anthropic/$MODEL]"
 echo "  Channel:     Telegram (webhook)"
 echo "  Webhook:     $WEBHOOK_URL"
-echo "  Service:     tinyclaw (single binary, port 8080)"
+echo "  Service:     tinyclaw (--http-port 8080, wake-on-request)"
 echo ""

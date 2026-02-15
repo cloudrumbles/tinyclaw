@@ -16,13 +16,28 @@ use std::path::PathBuf;
 use tokio::sync::mpsc;
 use tracing::{info, error};
 
+// Compile-time defaults baked in from .env by build.rs.
+// Runtime env vars override these if set.
+const BUILTIN_TELEGRAM_TOKEN: Option<&str> = option_env!("TELEGRAM_BOT_TOKEN");
+const BUILTIN_CLAUDE_TOKEN: Option<&str> = option_env!("CLAUDE_CODE_OAUTH_TOKEN");
+
 #[tokio::main]
 async fn main() {
-    // Load .env file (if present)
+    // Load .env file if present (runtime overrides compile-time defaults)
     dotenvy::dotenv().ok();
 
+    // Inject compile-time secrets into the process environment so child
+    // processes (e.g. claude CLI) inherit them. Runtime env vars take priority.
+    if let Some(token) = BUILTIN_CLAUDE_TOKEN {
+        if std::env::var("CLAUDE_CODE_OAUTH_TOKEN").is_err() {
+            unsafe { std::env::set_var("CLAUDE_CODE_OAUTH_TOKEN", token) };
+        }
+    }
+
     let tinyclaw_home = config::resolve_tinyclaw_home();
-    std::fs::create_dir_all(&tinyclaw_home).ok();
+
+    // Bootstrap: create directories + default config files if missing
+    config::bootstrap(&tinyclaw_home);
 
     // Initialize logging (must hold guard for entire program lifetime)
     let _log_guard = logging::init_logging(&tinyclaw_home);
@@ -30,33 +45,26 @@ async fn main() {
     info!("TinyClaw starting (Rust)");
     info!("TINYCLAW_HOME: {}", tinyclaw_home.display());
 
-    // Ensure required directories exist
-    let logs_dir = tinyclaw_home.join("logs");
-    let files_dir = tinyclaw_home.join("files");
-    std::fs::create_dir_all(&logs_dir).ok();
-    std::fs::create_dir_all(&files_dir).ok();
-
-    // Load settings to get bot token
+    // Load settings
     let settings = config::get_settings(&tinyclaw_home);
 
+    // Resolve bot token: runtime env > settings.json > compile-time default
     let bot_token = std::env::var("TELEGRAM_BOT_TOKEN")
-        .or_else(|_| {
+        .ok()
+        .or_else(|| {
             settings
                 .channels
                 .as_ref()
                 .and_then(|c| c.telegram.as_ref())
                 .and_then(|t| t.bot_token.clone())
-                .ok_or(std::env::VarError::NotPresent)
         })
-        .unwrap_or_else(|_| {
-            error!("TELEGRAM_BOT_TOKEN not set in environment or settings.json");
+        .or_else(|| BUILTIN_TELEGRAM_TOKEN.map(String::from))
+        .unwrap_or_else(|| {
+            error!("TELEGRAM_BOT_TOKEN not set");
             std::process::exit(1);
         });
 
-    let webhook_url = std::env::var("WEBHOOK_URL").unwrap_or_else(|_| {
-        error!("WEBHOOK_URL not set in environment");
-        std::process::exit(1);
-    });
+    let webhook_url = std::env::var("WEBHOOK_URL").ok();
 
     // Log agent/team configuration
     let agents = config::get_agents(&settings);

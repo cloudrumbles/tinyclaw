@@ -1,0 +1,12 @@
+name = "tinyclaw-sandbox"
+type = "sandbox"
+description = "Ubuntu 24.04 sandbox for TinyClaw"
+
+[runtime]
+generation = "mk3"
+memory = 4096
+
+[[runtime.ports]]
+name = "webhook"
+target = 3000
+protocol = "tcp"

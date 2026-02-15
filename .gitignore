@@ -3,18 +3,25 @@ target/
 dist/
 node_modules/
 
+# Lock files from old runtimes
+package-lock.json
+bun.lock
+
 # TinyClaw runtime files
-.tinyclaw
+.tinyclaw/
 
 *.log
 
 # Environment variables
 .env
+.env.*
 
 # OS files
 .DS_Store
+Thumbs.db
 
 # Editor
 .vscode/
 .idea/
 *.swp
+*~
