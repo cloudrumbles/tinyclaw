@@ -1,0 +1,112 @@
+name: Create Release Bundle
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+
+      - name: Get version from tag
+        id: get_version
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+          else
+            VERSION=$(git describe --tags --always)
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Create bundle tarball
+        run: |
+          VERSION="${{ steps.get_version.outputs.version }}"
+          BUNDLE_NAME="tinyclaw-bundle.tar.gz"
+          TEMP_DIR=$(mktemp -d)
+          BUNDLE_DIR="$TEMP_DIR/tinyclaw"
+
+          mkdir -p "$BUNDLE_DIR"
+
+          # Copy binary
+          cp target/release/tinyclaw "$BUNDLE_DIR/"
+
+          # Copy supporting files
+          cp -r .agents/ "$BUNDLE_DIR/"
+          cp -r templates/ "$BUNDLE_DIR/"
+          cp -r scripts/ "$BUNDLE_DIR/"
+          cp -r docs/ "$BUNDLE_DIR/"
+
+          cp README.md "$BUNDLE_DIR/"
+          cp AGENTS.md "$BUNDLE_DIR/"
+          cp SOUL.md "$BUNDLE_DIR/"
+          cp heartbeat.md "$BUNDLE_DIR/"
+          cp LICENSE "$BUNDLE_DIR/"
+
+          # Make scripts executable
+          chmod +x "$BUNDLE_DIR/tinyclaw"
+          chmod +x "$BUNDLE_DIR/scripts/"*.sh 2>/dev/null || true
+
+          # Create tarball
+          cd "$TEMP_DIR"
+          tar -czf "$GITHUB_WORKSPACE/$BUNDLE_NAME" tinyclaw/
+
+          BUNDLE_SIZE=$(du -h "$GITHUB_WORKSPACE/$BUNDLE_NAME" | cut -f1)
+          echo "Bundle created: $BUNDLE_NAME ($BUNDLE_SIZE)"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        if: github.ref_type == 'tag'
+        with:
+          body: |
+            ## TinyClaw ${{ steps.get_version.outputs.version }}
+
+            ### Installation
+
+            Download `tinyclaw-bundle.tar.gz`, extract, and run:
+            ```bash
+            tar -xzf tinyclaw-bundle.tar.gz
+            ./tinyclaw/scripts/deploy-sprite.sh <sprite-name> --telegram-token <token> --claude-token <token>
+            ```
+
+            ### Requirements
+            - Claude Code CLI
+            - Linux (x86_64)
+          files: |
+            tinyclaw-bundle.tar.gz
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifact (for non-tag builds)
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tinyclaw-bundle
+          path: tinyclaw-bundle.tar.gz
+          retention-days: 7

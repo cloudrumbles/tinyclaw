@@ -1,0 +1,30 @@
+[package]
+name = "tinyclaw"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+teloxide = { version = "0.17", features = ["macros", "webhooks-axum"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", features = ["stream"] }
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+dotenvy = "0.15"
+rand = "0.10"
+chrono = { version = "0.4", features = ["serde"] }
+regex = "1"
+dashmap = "6"
+futures = "0.3"
+dirs = "6"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+codegen-units = 1

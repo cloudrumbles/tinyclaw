@@ -1,0 +1,20 @@
+# Build output
+target/
+dist/
+node_modules/
+
+# TinyClaw runtime files
+.tinyclaw
+
+*.log
+
+# Environment variables
+.env
+
+# OS files
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+*.swp
