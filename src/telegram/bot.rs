@@ -304,8 +304,13 @@ async fn handle_incoming_message(
     // Send typing indicator
     let _ = bot.send_chat_action(chat_id, ChatAction::Typing).await;
 
+    // Prepend timestamp so the agent knows when the message was sent
+    let now_sgt = chrono::Utc::now()
+        .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap());
+    let timestamp_prefix = format!("[{}]", now_sgt.format("%Y-%m-%d %H:%M:%S SGT"));
+
     // Build full message with file references
-    let mut full_message = message_text.clone();
+    let mut full_message = format!("{timestamp_prefix} {message_text}");
     if !downloaded_files.is_empty() {
         let file_refs: Vec<String> = downloaded_files
             .iter()

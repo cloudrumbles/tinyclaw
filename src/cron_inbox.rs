@@ -74,7 +74,10 @@ pub async fn run_cron_inbox(
                 let now_millis = now.as_millis() as u64;
                 let rand_val: u32 = rand::random();
 
-                let message = format!("@{agent_id} [CRON JOB: {job_name}]\n{prompt}");
+                let now_sgt = chrono::Utc::now()
+                    .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap());
+                let ts = now_sgt.format("%Y-%m-%d %H:%M:%S SGT");
+                let message = format!("@{agent_id} [{ts}] [CRON JOB: {job_name}]\n{prompt}");
                 let message_id = format!("cron_{job_id}_{now_millis}_{rand_val:08x}");
 
                 let msg = IncomingMessage {
