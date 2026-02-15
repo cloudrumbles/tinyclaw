@@ -143,6 +143,12 @@ async def main():
     webhook_url = f"{preview_url}/webhook"
     ok(f"Webhook: {webhook_url}")
 
+    # ── Stop running process (must happen before upload to avoid "text file busy") ──
+    info("Stopping tinyclaw...")
+    await sandbox.process.exec({"command": "pkill -f 'tinyclaw' 2>/dev/null; exit 0"})
+    await asyncio.sleep(2)
+    ok("Stopped")
+
     # ── Upload binary ─────────────────────────────────────────────────────
     info("Uploading binary...")
     await sandbox.fs.write_binary(f"{remote_dir}/tinyclaw", str(binary))
@@ -190,8 +196,6 @@ async def main():
 
     # ── Start ─────────────────────────────────────────────────────────────
     info("Starting tinyclaw...")
-    await sandbox.process.exec({"command": "pkill -f 'tinyclaw' 2>/dev/null; exit 0"})
-    await asyncio.sleep(1)
 
     # chown everything to the non-root user
     await sandbox.process.exec({

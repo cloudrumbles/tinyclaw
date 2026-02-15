@@ -82,6 +82,7 @@ fn hardcoded_settings() -> Settings {
             provider: "anthropic".to_string(),
             model: "opus".to_string(),
             working_directory: "sultana".to_string(),
+            timeout: None,
         },
     );
 

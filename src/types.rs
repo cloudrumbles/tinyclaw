@@ -7,6 +7,10 @@ pub struct AgentConfig {
     pub provider: String,
     pub model: String,
     pub working_directory: String,
+    /// Per-agent idle timeout in seconds. If the CLI produces no output for this
+    /// long, the process is killed. Defaults to 60s if not set.
+    #[serde(default)]
+    pub timeout: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
