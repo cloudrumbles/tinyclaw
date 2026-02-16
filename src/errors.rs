@@ -11,6 +11,9 @@ pub enum InvokeError {
     #[error("command timed out after {0}s: {1}")]
     Timeout(u64, String),
 
+    #[error("cancelled by user")]
+    Cancelled,
+
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }

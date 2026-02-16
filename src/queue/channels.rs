@@ -29,6 +29,9 @@ pub enum OutgoingMessage {
         /// If set, attach an InlineKeyboardButton::WebApp to the response.
         /// (app_name, button_text) — URL is derived from the webhook base URL.
         miniapp: Option<(String, String)>,
+        /// If set, pin the miniapp as the chat's persistent menu button.
+        /// (app_name, button_text) — URL is derived from the webhook base URL.
+        menubutton: Option<(String, String)>,
     },
     TypingStart {
         message_id: String,

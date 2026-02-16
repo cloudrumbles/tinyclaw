@@ -6,6 +6,7 @@ use regex::Regex;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn, error};
 
 use crate::agent_setup::{ensure_persona, ensure_workspace, assemble_claude_md};
@@ -213,6 +214,7 @@ async fn run_claude_streaming(
     cwd: Option<&Path>,
     idle_timeout: Duration,
     status_tx: mpsc::Sender<String>,
+    cancel: CancellationToken,
 ) -> Result<String, InvokeError> {
     let env: HashMap<String, String> = std::env::vars()
         .filter(|(key, _)| {
@@ -401,6 +403,11 @@ async fn run_claude_streaming(
                     Err(e) => return Err(InvokeError::Io(e)),
                 }
             }
+            _ = cancel.cancelled() => {
+                info!("Cancelled by user: {} {:?}", command, args);
+                child.kill().await.ok();
+                return Err(InvokeError::Cancelled);
+            }
             _ = tokio::time::sleep(idle_timeout) => {
                 warn!(
                     "Idle timeout ({}s, no output): {} {:?}",
@@ -449,6 +456,7 @@ pub async fn invoke_bot(
     should_reset: bool,
     skills_source: Option<&Path>,
     status_tx: Option<mpsc::Sender<String>>,
+    cancel: CancellationToken,
 ) -> Result<String, InvokeError> {
     let t_invoke = std::time::Instant::now();
 
@@ -516,7 +524,7 @@ pub async fn invoke_bot(
     info!("[timing] pre-claude: {:?}", t_invoke.elapsed());
 
     let result = if let Some(tx) = status_tx {
-        run_claude_streaming("claude", &args_refs, Some(&working_dir), idle_timeout, tx).await
+        run_claude_streaming("claude", &args_refs, Some(&working_dir), idle_timeout, tx, cancel).await
     } else {
         run_command("claude", &args_refs, Some(&working_dir), idle_timeout).await
     };

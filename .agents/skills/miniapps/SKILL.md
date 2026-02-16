@@ -161,17 +161,41 @@ Create distinctive, production-grade interfaces. Avoid generic AI aesthetics.
 - **Layout**: Use the full viewport. Cards, grids, and lists should feel native to mobile.
 - **Touch targets**: Minimum 44px for tap targets. Add haptic feedback on important actions.
 
+## Menu button (persistent launcher)
+
+You can pin a mini app as the chat's **menu button** — the button next to the text input field in Telegram. This replaces the default command menu and gives the user one-tap access to the mini app at all times.
+
+Use this for mini apps the user will open frequently (daily tracker, dashboard, todo list, etc). The menu button persists across messages — it stays until explicitly changed or reset.
+
+To set the menu button, include this tag in your response **in addition to** the `[miniapp:]` tag:
+
+```
+[menubutton: app-name: Button Text]
+```
+
+- `app-name` must match a miniapp directory under `~/.tinyclaw/miniapps/`
+- `Button Text` is the label shown on the menu button (keep it short, ~2-3 words)
+- The `[menubutton:]` tag is stripped from the response just like `[miniapp:]`
+- You can use both tags together — `[miniapp:]` sends an inline button on the message, `[menubutton:]` pins it as the persistent menu button
+
+To reset the menu button back to the default commands menu, use:
+```
+[menubutton: commands: Commands]
+```
+
 ## Response format
 
 Your response should include:
 1. A brief explanation of what the mini app does
 2. The `[miniapp: app-name: Button Text]` tag
+3. Optionally, the `[menubutton: app-name: Button Text]` tag if the user wants persistent access
 
 Example response:
 ```
 I built you a nutrition tracker! It lets you log meals, see daily totals, and track macros over time. Data is saved locally on your device.
 
 [miniapp: nutrition-tracker: Open Tracker]
+[menubutton: nutrition-tracker: Nutrition]
 ```
 
 ## Important notes

@@ -7,7 +7,7 @@ use teloxide::net::Download;
 use teloxide::prelude::*;
 use teloxide::types::{
     ChatAction, FileMeta, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, MediaKind,
-    MessageKind, ReplyParameters, WebAppInfo,
+    MenuButton, MessageKind, ReplyParameters, WebAppInfo,
 };
 use teloxide::error_handlers::LoggingErrorHandler;
 use teloxide::update_listeners::webhooks;
@@ -16,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::config;
-use crate::queue::{IncomingMessage, OutgoingMessage};
+use crate::queue::{CancelHandle, IncomingMessage, OutgoingMessage};
 use crate::telegram::files::{
     build_unique_file_path, ensure_file_extension, ext_from_mime, split_message,
 };
@@ -38,6 +38,7 @@ pub async fn run_telegram(
     webhook_url: Option<String>,
     incoming_tx: mpsc::Sender<IncomingMessage>,
     mut outgoing_rx: mpsc::Receiver<OutgoingMessage>,
+    cancel_handle: CancelHandle,
 ) {
     let bot = Bot::new(&bot_token);
 
@@ -104,6 +105,7 @@ pub async fn run_telegram(
     let pending_in = pending.clone();
     let files_dir = Arc::new(files_dir);
     let default_workspace = Arc::new(default_workspace);
+    let cancel_handle = Arc::new(cancel_handle);
     let cron_home = default_workspace.clone();
     let miniapps_home = default_workspace.clone();
     let cron_tx = incoming_tx.clone();
@@ -115,6 +117,7 @@ pub async fn run_telegram(
             let pending = pending_in.clone();
             let files_dir = files_dir.clone();
             let default_workspace = default_workspace.clone();
+            let cancel = cancel_handle.clone();
             async move {
                 handle_incoming_message(
                     &bot,
@@ -123,6 +126,7 @@ pub async fn run_telegram(
                     &pending,
                     &files_dir,
                     &default_workspace,
+                    &cancel,
                 )
                 .await;
                 respond(())
@@ -200,6 +204,7 @@ async fn handle_incoming_message(
     pending: &Arc<Mutex<HashMap<String, PendingMessage>>>,
     files_dir: &Path,
     default_workspace: &Path,
+    cancel_handle: &Arc<CancelHandle>,
 ) {
     // Only handle private chats
     if !msg.chat.is_private() {
@@ -242,6 +247,20 @@ async fn handle_incoming_message(
             String::new()
         }
     );
+
+    // Handle /stop command — cancel current task
+    if message_text.trim().eq_ignore_ascii_case("/stop")
+        || message_text.trim().eq_ignore_ascii_case("!stop")
+    {
+        info!("Stop requested by {sender}");
+        let token = cancel_handle.lock().await;
+        token.cancel();
+        let _ = bot
+            .send_message(chat_id, "Stopping...")
+            .reply_parameters(ReplyParameters::new(msg_id))
+            .await;
+        return;
+    }
 
     // Handle /reset command
     if message_text.trim().eq_ignore_ascii_case("/reset")
@@ -593,6 +612,7 @@ async fn handle_outgoing(
                 chat_id,
                 reply_to_message_id,
                 ref miniapp,
+                ref menubutton,
                 ..
             } => {
 
@@ -700,6 +720,34 @@ async fn handle_outgoing(
                             if let Err(e) = req.await {
                                 error!("Failed to send message chunk: {e}");
                             }
+                        }
+                    }
+                }
+
+                // Set chat menu button if requested
+                if let Some((app_name, button_text)) = menubutton {
+                    let mb = if app_name == "commands" {
+                        Some(MenuButton::Commands)
+                    } else if !base_url.is_empty() {
+                        let app_url = format!("{base_url}/apps/{app_name}/index.html");
+                        app_url.parse::<reqwest::Url>().ok().map(|url| {
+                            MenuButton::WebApp {
+                                text: button_text.clone(),
+                                web_app: WebAppInfo { url },
+                            }
+                        })
+                    } else {
+                        None
+                    };
+                    if let Some(mb) = mb {
+                        match bot
+                            .set_chat_menu_button()
+                            .chat_id(target_chat_id)
+                            .menu_button(mb)
+                            .await
+                        {
+                            Ok(_) => info!("Set menu button to '{button_text}' for chat {target_chat_id}"),
+                            Err(e) => error!("Failed to set menu button: {e}"),
                         }
                     }
                 }

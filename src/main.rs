@@ -8,8 +8,10 @@ mod telegram;
 mod types;
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
+use tokio_util::sync::CancellationToken;
 use tracing::{info, error};
 
 // Compile-time defaults baked in from .env by build.rs.
@@ -76,16 +78,21 @@ async fn main() {
     let (incoming_tx, incoming_rx) = mpsc::channel::<queue::IncomingMessage>(256);
     let (outgoing_tx, outgoing_rx) = mpsc::channel::<queue::OutgoingMessage>(256);
 
+    // Shared cancel handle: bot.rs cancels on /stop, processor checks it
+    let cancel_handle: queue::CancelHandle =
+        Arc::new(Mutex::new(CancellationToken::new()));
+
     // Spawn queue processor task
     let qp_home = tinyclaw_home.clone();
     let qp_skills = skills_source.clone();
+    let qp_cancel = cancel_handle.clone();
     let queue_handle = tokio::spawn(async move {
-        queue::run_queue_processor(qp_home, qp_skills, incoming_rx, outgoing_tx).await;
+        queue::run_queue_processor(qp_home, qp_skills, incoming_rx, outgoing_tx, qp_cancel).await;
     });
 
     // Run telegram (blocks — it runs the teloxide dispatcher)
     let tg_home = tinyclaw_home.clone();
-    telegram::run_telegram(tg_home, bot_token, webhook_url, incoming_tx, outgoing_rx).await;
+    telegram::run_telegram(tg_home, bot_token, webhook_url, incoming_tx, outgoing_rx, cancel_handle).await;
 
     // If telegram exits, shut down everything
     info!("Telegram task exited, shutting down...");

@@ -2,12 +2,17 @@ use std::path::Path;
 use std::sync::Arc;
 
 use regex::Regex;
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{mpsc, Mutex, Semaphore};
+use tokio_util::sync::CancellationToken;
 use tracing::{info, error};
 
 use crate::config;
 use crate::invoke::invoke_bot;
 use crate::queue::channels::{IncomingMessage, OutgoingMessage};
+
+/// Shared handle to the current task's cancellation token.
+/// Bot.rs cancels it on /stop; processor.rs sets a new one per message.
+pub type CancelHandle = Arc<Mutex<CancellationToken>>;
 
 /// Run the queue processor task. Reads from `incoming_rx`, writes to `outgoing_tx`.
 pub async fn run_queue_processor(
@@ -15,6 +20,7 @@ pub async fn run_queue_processor(
     skills_source: Option<std::path::PathBuf>,
     mut incoming_rx: mpsc::Receiver<IncomingMessage>,
     outgoing_tx: mpsc::Sender<OutgoingMessage>,
+    cancel_handle: CancelHandle,
 ) {
     info!("Queue processor started");
 
@@ -26,6 +32,7 @@ pub async fn run_queue_processor(
         let tx = outgoing_tx.clone();
         let skills = skills_source.clone();
         let sem = lock.clone();
+        let cancel = cancel_handle.clone();
 
         tokio::spawn(async move {
             let t0 = std::time::Instant::now();
@@ -33,6 +40,10 @@ pub async fn run_queue_processor(
             // Acquire semaphore (sequential processing)
             let _permit = sem.acquire().await.unwrap();
             info!("[timing] semaphore wait: {:?}", t0.elapsed());
+
+            // Create a fresh cancel token for this message and store it
+            let token = CancellationToken::new();
+            *cancel.lock().await = token.clone();
 
             // Send typing start
             if let Some(chat_id) = msg.chat_id {
@@ -45,7 +56,7 @@ pub async fn run_queue_processor(
             }
 
             let t2 = std::time::Instant::now();
-            let result = process_message(&home, skills.as_deref(), &msg, &tx).await;
+            let result = process_message(&home, skills.as_deref(), &msg, &tx, token).await;
             info!("[timing] process_message: {:?}", t2.elapsed());
 
             // Send typing stop
@@ -56,7 +67,7 @@ pub async fn run_queue_processor(
                 .await;
 
             match result {
-                Ok((response, files, miniapp)) => {
+                Ok((response, files, miniapp, menubutton)) => {
                     let _ = tx
                         .send(OutgoingMessage::Response {
                             sender: msg.sender.clone(),
@@ -68,6 +79,7 @@ pub async fn run_queue_processor(
                             chat_id: msg.chat_id,
                             reply_to_message_id: msg.reply_to_message_id,
                             miniapp,
+                            menubutton,
                         })
                         .await;
                 }
@@ -85,6 +97,7 @@ pub async fn run_queue_processor(
                             chat_id: msg.chat_id,
                             reply_to_message_id: msg.reply_to_message_id,
                             miniapp: None,
+                            menubutton: None,
                         })
                         .await;
                 }
@@ -102,7 +115,8 @@ async fn process_message(
     skills_source: Option<&Path>,
     msg: &IncomingMessage,
     outgoing_tx: &mpsc::Sender<OutgoingMessage>,
-) -> anyhow::Result<(String, Vec<String>, Option<(String, String)>)> {
+    cancel: CancellationToken,
+) -> anyhow::Result<(String, Vec<String>, Option<(String, String)>, Option<(String, String)>)> {
     let settings = config::get_settings(tinyclaw_home);
     let bot_config = config::get_bot_config(&settings);
 
@@ -184,10 +198,15 @@ async fn process_message(
         should_reset,
         skills_source,
         Some(status_tx.clone()),
+        cancel,
     )
     .await
     {
         Ok(resp) => resp,
+        Err(crate::errors::InvokeError::Cancelled) => {
+            info!("Task cancelled by user");
+            "Cancelled.".into()
+        }
         Err(crate::errors::InvokeError::Timeout(secs, _)) => {
             error!("Bot timeout: {secs}s");
             "Sorry, the request timed out. Please try again.".into()
@@ -220,13 +239,19 @@ async fn process_message(
         .map(|c| (c[1].trim().to_string(), c[2].trim().to_string()));
     final_text = miniapp_re.replace_all(&final_text, "").trim().to_string();
 
+    // Extract [menubutton: name: button_text] tag — pins miniapp as chat menu button
+    let menubutton_re = Regex::new(r"\[menubutton:\s*([^:\]]+):\s*([^\]]+)\]").unwrap();
+    let menubutton = menubutton_re.captures(&final_text)
+        .map(|c| (c[1].trim().to_string(), c[2].trim().to_string()));
+    final_text = menubutton_re.replace_all(&final_text, "").trim().to_string();
+
     // Truncate if too long
     if final_text.len() > 4000 {
         final_text.truncate(3900);
         final_text.push_str("\n\n[Response truncated...]");
     }
 
-    Ok((final_text, all_files, miniapp))
+    Ok((final_text, all_files, miniapp, menubutton))
 }
 
 fn now_millis() -> u64 {
