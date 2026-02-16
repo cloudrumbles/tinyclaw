@@ -45,11 +45,38 @@ pub fn reset_flag(tinyclaw_home: &Path) -> PathBuf {
     tinyclaw_home.join("reset_flag")
 }
 
+pub fn persona_dir(tinyclaw_home: &Path, persona_id: &str) -> PathBuf {
+    tinyclaw_home.join("personas").join(persona_id)
+}
+
+/// Resolve the workspace directory for a specific agent + workspace name.
+pub fn agent_workspace_dir(workspace_root: &Path, agent_id: &str, ws_name: &str) -> PathBuf {
+    workspace_root.join(agent_id).join(ws_name)
+}
+
+/// Read the active workspace name from _meta/active, defaulting to "default".
+pub fn active_workspace(workspace_root: &Path, agent_id: &str) -> String {
+    let meta = workspace_root.join(agent_id).join("_meta").join("active");
+    std::fs::read_to_string(&meta)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "default".to_string())
+}
+
+/// Compute the Claude CLI project directory path hash for a given workspace dir.
+/// Claude CLI uses the canonical path with `/` replaced by `-` and leading `-`.
+pub fn claude_project_hash(workspace_dir: &Path) -> String {
+    let canonical = std::fs::canonicalize(workspace_dir)
+        .unwrap_or_else(|_| workspace_dir.to_path_buf());
+    canonical.to_string_lossy().replace('/', "-")
+}
+
 /// Bootstrap tinyclaw home directory with all required subdirectories
 /// and default config files (only writes files that don't already exist).
 pub fn bootstrap(tinyclaw_home: &Path) {
     // Create all required directories
-    for subdir in &["logs", "files", "chats", "cron-inbox"] {
+    for subdir in &["logs", "files", "chats", "cron-inbox", "personas"] {
         std::fs::create_dir_all(tinyclaw_home.join(subdir)).ok();
     }
 
@@ -83,6 +110,8 @@ fn hardcoded_settings() -> Settings {
             model: "opus".to_string(),
             working_directory: "sultana".to_string(),
             timeout: None,
+            persona: None,
+            workspace: None,
         },
     );
 

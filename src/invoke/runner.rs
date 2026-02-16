@@ -8,7 +8,8 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 use tracing::{info, warn, error};
 
-use crate::agent_setup::{ensure_agent_directory, update_agent_teammates};
+use crate::agent_setup::{ensure_persona, ensure_workspace, assemble_claude_md};
+use crate::config;
 use crate::errors::InvokeError;
 use crate::types::{AgentConfig, TeamConfig, resolve_claude_model, resolve_codex_model};
 
@@ -446,6 +447,7 @@ pub async fn invoke_agent(
     agent_id: &str,
     message: &str,
     workspace_path: &Path,
+    tinyclaw_home: &Path,
     should_reset: bool,
     agents: &HashMap<String, AgentConfig>,
     teams: &HashMap<String, TeamConfig>,
@@ -453,39 +455,37 @@ pub async fn invoke_agent(
     status_tx: Option<mpsc::Sender<String>>,
 ) -> Result<String, InvokeError> {
     let t_invoke = std::time::Instant::now();
-    let agent_dir = workspace_path.join(agent_id);
-    let is_new = !agent_dir.exists();
 
-    // Ensure agent directory exists (blocking FS ops)
-    let ad = agent_dir.clone();
-    let ss = skills_source.map(PathBuf::from);
-    let agents_clone = agents.clone();
-    let teams_clone = teams.clone();
-    let agent_id_owned = agent_id.to_string();
+    // Resolve persona and workspace
+    let persona_id = agent.persona.as_deref().unwrap_or(agent_id).to_string();
+    let ws_name = agent.workspace.as_deref()
+        .map(String::from)
+        .unwrap_or_else(|| config::active_workspace(workspace_path, agent_id));
+    let workspace_dir = config::agent_workspace_dir(workspace_path, agent_id, &ws_name);
 
-    tokio::task::spawn_blocking(move || {
-        ensure_agent_directory(&ad, ss.as_deref());
-        update_agent_teammates(&ad, &agent_id_owned, &agents_clone, &teams_clone);
-    })
-    .await
-    .ok();
+    // Set up three layers: persona, workspace, assembled CLAUDE.md (blocking FS ops)
+    {
+        let home = tinyclaw_home.to_path_buf();
+        let ws_root = workspace_path.to_path_buf();
+        let ws_dir = workspace_dir.clone();
+        let pid = persona_id.clone();
+        let aid = agent_id.to_string();
+        let ss = skills_source.map(PathBuf::from);
+        let agents_clone = agents.clone();
+        let teams_clone = teams.clone();
+
+        tokio::task::spawn_blocking(move || {
+            ensure_persona(&home, &pid, &ws_root, &aid);
+            ensure_workspace(&ws_root, &aid, &ws_name, ss.as_deref());
+            assemble_claude_md(&ws_dir, &home, &pid, &aid, &agents_clone, &teams_clone, ss.as_deref());
+        })
+        .await
+        .ok();
+    }
     info!("[timing] agent_setup: {:?}", t_invoke.elapsed());
 
-    if is_new {
-        info!("Initialized agent directory: {}", agent_dir.display());
-    }
-
-    // Resolve working directory
-    let working_dir = if !agent.working_directory.is_empty() {
-        let wd = PathBuf::from(&agent.working_directory);
-        if wd.is_absolute() {
-            wd
-        } else {
-            workspace_path.join(&agent.working_directory)
-        }
-    } else {
-        agent_dir
-    };
+    // Working directory is the active workspace
+    let working_dir = workspace_dir;
 
     let idle_timeout = agent
         .timeout

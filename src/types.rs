@@ -11,6 +11,13 @@ pub struct AgentConfig {
     /// long, the process is killed. Defaults to 60s if not set.
     #[serde(default)]
     pub timeout: Option<u64>,
+    /// Persona ID for this agent. Defaults to the agent ID if not set.
+    /// Multiple agents can share a persona (same soul, different workspaces).
+    #[serde(default)]
+    pub persona: Option<String>,
+    /// Active workspace name. Defaults to "default".
+    #[serde(default)]
+    pub workspace: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

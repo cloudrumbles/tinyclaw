@@ -28,13 +28,11 @@ pub async fn beat(
         }
     };
 
-    // Resolve agent directory
-    let agent_dir = if agent.working_directory.is_empty() {
-        workspace.join(agent_id)
-    } else {
-        let wd = PathBuf::from(&agent.working_directory);
-        if wd.is_absolute() { wd } else { workspace.join(&agent.working_directory) }
-    };
+    // Resolve active workspace directory
+    let ws_name = agent.workspace.as_deref()
+        .map(String::from)
+        .unwrap_or_else(|| config::active_workspace(&workspace, agent_id));
+    let agent_dir = config::agent_workspace_dir(&workspace, agent_id, &ws_name);
 
     // Read agent-specific heartbeat prompt, or use default
     let heartbeat_file = agent_dir.join("heartbeat.md");

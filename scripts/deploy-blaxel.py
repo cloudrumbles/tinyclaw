@@ -19,7 +19,7 @@
 #   5. Start tinyclaw as non-root user
 #
 # Usage:
-#   ./scripts/deploy-blaxel.py [--skip-build] [--skip-claude-install]
+#   ./scripts/deploy-blaxel.py [--skip-build] [--skip-claude-install] [--dev]
 # =============================================================================
 
 import argparse
@@ -69,12 +69,16 @@ def load_env(project_root: Path) -> None:
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Deploy TinyClaw to Blaxel sandbox")
-    parser.add_argument("--sandbox-name", default="tinyclaw")
+    parser.add_argument("--sandbox-name", default=None)
+    parser.add_argument("--dev", action="store_true", help="Deploy with dev bot token to tinyclaw-dev sandbox")
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--skip-claude-install", action="store_true")
     parser.add_argument("--region", default="us-pdx-1")
     parser.add_argument("--memory", type=int, default=4096)
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.sandbox_name is None:
+        args.sandbox_name = "tinyclaw-dev" if args.dev else "tinyclaw"
+    return args
 
 
 async def main():
@@ -99,11 +103,29 @@ async def main():
     remote_dir = "/home/user/tinyclaw"
     webhook_port = 3000
 
+    # ── Token swap for dev builds ────────────────────────────────────────
+    env_file = project_root / ".env"
+    original_env = None
+    if args.dev and not args.skip_build:
+        dev_token = os.environ.get("TELEGRAM_BOT_TOKEN_DEV")
+        if not dev_token:
+            die("TELEGRAM_BOT_TOKEN_DEV not set in .env")
+        original_env = env_file.read_text()
+        swapped = original_env.replace(
+            f"TELEGRAM_BOT_TOKEN={os.environ.get('TELEGRAM_BOT_TOKEN', '')}",
+            f"TELEGRAM_BOT_TOKEN={dev_token}",
+        )
+        env_file.write_text(swapped)
+        info(f"Swapped bot token for dev build")
+
     # ── Build ─────────────────────────────────────────────────────────────
     binary = project_root / "target" / "release" / "tinyclaw"
     if not args.skip_build:
         info("Building (secrets baked in from .env)...")
         result = subprocess.run(["cargo", "build", "--release"], cwd=project_root)
+        if original_env is not None:
+            env_file.write_text(original_env)
+            ok("Restored .env")
         if result.returncode != 0:
             die("cargo build failed")
     if not binary.exists():
