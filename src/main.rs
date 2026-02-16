@@ -101,8 +101,9 @@ async fn main() {
     // Spawn queue processor task
     let qp_home = tinyclaw_home.clone();
     let qp_skills = skills_source.clone();
+    let qp_tx = incoming_tx.clone();
     let queue_handle = tokio::spawn(async move {
-        queue::run_queue_processor(qp_home, qp_skills, incoming_rx, outgoing_tx).await;
+        queue::run_queue_processor(qp_home, qp_skills, incoming_rx, outgoing_tx, qp_tx).await;
     });
 
     // Spawn cron inbox watcher (handles heartbeat + scheduled jobs via cron-job.org)

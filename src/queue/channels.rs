@@ -29,6 +29,9 @@ pub enum OutgoingMessage {
         files: Vec<String>,
         chat_id: Option<i64>,
         reply_to_message_id: Option<i32>,
+        /// If set, attach an InlineKeyboardButton::WebApp to the response.
+        /// (app_name, button_text) — URL is derived from the webhook base URL.
+        miniapp: Option<(String, String)>,
     },
     TypingStart {
         message_id: String,
@@ -36,5 +39,10 @@ pub enum OutgoingMessage {
     },
     TypingStop {
         message_id: String,
+    },
+    StatusUpdate {
+        message_id: String,
+        chat_id: i64,
+        status: String,
     },
 }

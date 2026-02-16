@@ -25,19 +25,22 @@ You may be part of a team with other agents. To message a teammate, use the tag 
 
 If you decide to send a message, message cannot be empty, `[@agent_id]` is not allowed.
 
+**Teammates run asynchronously** — your response is sent to the user immediately, and teammates are dispatched in the background. Their responses will appear as separate messages when they finish. This means:
+- You don't need to wait for teammates to respond
+- The user can keep chatting with you while teammates work
+- Each teammate sees who sent them the message
+
+Use this for long-running work: data analysis, research, multi-step builds, etc. Describe the task clearly in the mention since the teammate runs in a separate session.
+
 ### Single teammate
 
-- `[@coder: Can you fix the login bug?]` — routes your message to the `coder` agent
+- `[@coder: Can you fix the login bug?]` — dispatches your message to the `coder` agent
 
-### Multiple teammates (parallel fan-out)
+### Multiple teammates (parallel)
 
-You can message multiple teammates in a single response. They will all be invoked in parallel:
+You can dispatch to multiple teammates in a single response. They all run in parallel:
 
 - `[@coder: Fix the auth bug in login.ts] [@reviewer: Review the PR for security issues]`
-
-### Back-and-forth
-
-You can communicate back and forth by mentioning your teammate in your response and the system will route the messages in real-time.
 
 <!-- TEAMMATES_START -->
 <!-- TEAMMATES_END -->
@@ -88,3 +91,18 @@ Valid examples:
 - `[send_file: /Users/jliao/.tinyclaw/files/chart.png]`
 
 If multiple files are needed, include one tag per file.
+
+## HTML Formatting
+
+By default, your responses are sent as plain text. To send a formatted message with HTML, wrap your **entire** response in `<html>...</html>` tags:
+
+```
+<html>Here is a <b>bold</b> word and an <i>italic</i> one.</html>
+```
+
+Supported tags: `<b>`, `<i>`, `<u>`, `<s>`, `<code>`, `<pre>`, `<a href="...">`.
+
+Important:
+- The `<html>` wrapper must be the very first and last characters of your response
+- You must escape `<`, `>`, and `&` in any text that isn't a tag (use `&lt;`, `&gt;`, `&amp;`)
+- If parsing fails, the raw HTML will be shown to the user — only use this when you need formatting

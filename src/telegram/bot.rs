@@ -6,7 +6,8 @@ use axum::extract::Path as AxumPath;
 use teloxide::net::Download;
 use teloxide::prelude::*;
 use teloxide::types::{
-    ChatAction, FileMeta, InputFile, MediaKind, MessageKind, ReplyParameters,
+    ChatAction, FileMeta, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, MediaKind,
+    MessageKind, ReplyParameters, WebAppInfo,
 };
 use teloxide::error_handlers::LoggingErrorHandler;
 use teloxide::update_listeners::webhooks;
@@ -27,6 +28,7 @@ struct PendingMessage {
     message_id: teloxide::types::MessageId,
     typing_token: CancellationToken,
     created_at: std::time::Instant,
+    status_message_id: Option<teloxide::types::MessageId>,
 }
 
 /// Run the Telegram bot task. Handles both incoming messages and outgoing responses.
@@ -58,11 +60,18 @@ pub async fn run_telegram(
     let pending: Arc<Mutex<HashMap<String, PendingMessage>>> =
         Arc::new(Mutex::new(HashMap::new()));
 
+    // Compute base URL for mini apps (strip /webhook suffix)
+    let base_url = webhook_url
+        .as_deref()
+        .map(|u| u.trim_end_matches("/webhook").to_string())
+        .unwrap_or_default();
+
     // Spawn outgoing message consumer
     let bot_out = bot.clone();
     let pending_out = pending.clone();
+    let base_url_out = base_url.clone();
     let outgoing_handle = tokio::spawn(async move {
-        handle_outgoing(bot_out, pending_out, &mut outgoing_rx).await;
+        handle_outgoing(bot_out, pending_out, &mut outgoing_rx, &base_url_out).await;
     });
 
     // Spawn pending message cleanup task (10-minute timeout)
@@ -139,17 +148,26 @@ pub async fn run_telegram(
                 .await
                 .expect("Failed to set up webhook");
 
+        // Serve mini apps from ~/.tinyclaw/miniapps/
+        let miniapps_dir = dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".tinyclaw/miniapps");
+        std::fs::create_dir_all(&miniapps_dir).ok();
+
         // Add /cron/{job_id} route for cron-job.org triggers
-        let app = tg_router.route(
-            "/cron/{job_id}",
-            axum::routing::get({
-                let home = cron_home;
-                move |AxumPath(job_id): AxumPath<String>| {
-                    let home = home.clone();
-                    async move { handle_cron_trigger(&home, &job_id) }
-                }
-            }),
-        );
+        // Add /apps/ route for serving mini app static files
+        let app = tg_router
+            .route(
+                "/cron/{job_id}",
+                axum::routing::get({
+                    let home = cron_home;
+                    move |AxumPath(job_id): AxumPath<String>| {
+                        let home = home.clone();
+                        async move { handle_cron_trigger(&home, &job_id) }
+                    }
+                }),
+            )
+            .nest_service("/apps", tower_http::services::ServeDir::new(&miniapps_dir));
 
         // Start HTTP server with graceful shutdown
         let tcp = tokio::net::TcpListener::bind(addr)
@@ -286,7 +304,6 @@ async fn handle_incoming_message(
 
     // Handle /reset command
     if message_text.trim().eq_ignore_ascii_case("/reset")
-        || message_text.trim().eq_ignore_ascii_case("/new")
         || message_text.trim().eq_ignore_ascii_case("!reset")
     {
         let reset_path = config::reset_flag(tinyclaw_home);
@@ -354,6 +371,7 @@ async fn handle_incoming_message(
                 message_id: msg_id,
                 typing_token: typing_token.clone(),
                 created_at: std::time::Instant::now(),
+                status_message_id: None,
             },
         );
     }
@@ -580,6 +598,7 @@ async fn handle_outgoing(
     bot: Bot,
     pending: Arc<Mutex<HashMap<String, PendingMessage>>>,
     outgoing_rx: &mut mpsc::Receiver<OutgoingMessage>,
+    base_url: &str,
 ) {
     while let Some(msg) = outgoing_rx.recv().await {
         match msg {
@@ -597,6 +616,35 @@ async fn handle_outgoing(
                     p.typing_token.cancel();
                 }
             }
+            OutgoingMessage::StatusUpdate {
+                ref message_id,
+                chat_id,
+                ref status,
+            } => {
+                let mut map = pending.lock().await;
+                if let Some(p) = map.get_mut(message_id) {
+                    let formatted = format!("<i>{status}</i>");
+                    if let Some(status_msg_id) = p.status_message_id {
+                        let _ = bot
+                            .edit_message_text(ChatId(chat_id), status_msg_id, &formatted)
+                            .parse_mode(teloxide::types::ParseMode::Html)
+                            .await;
+                    } else {
+                        match bot
+                            .send_message(ChatId(chat_id), &formatted)
+                            .parse_mode(teloxide::types::ParseMode::Html)
+                            .await
+                        {
+                            Ok(sent) => {
+                                p.status_message_id = Some(sent.id);
+                            }
+                            Err(e) => {
+                                error!("Failed to send status message: {e}");
+                            }
+                        }
+                    }
+                }
+            }
             OutgoingMessage::Response {
                 ref channel,
                 ref sender,
@@ -608,6 +656,7 @@ async fn handle_outgoing(
                 ref files,
                 chat_id,
                 reply_to_message_id,
+                ref miniapp,
             } => {
                 // Heartbeat responses don't go to telegram
                 if channel == "heartbeat" {
@@ -623,13 +672,14 @@ async fn handle_outgoing(
                 let entry = map.remove(message_id);
                 drop(map);
 
-                let (target_chat_id, target_reply_id) = if let Some(ref p) = entry {
+                let (target_chat_id, target_reply_id, status_msg_id) = if let Some(ref p) = entry {
                     p.typing_token.cancel();
-                    (p.chat_id, Some(p.message_id))
+                    (p.chat_id, Some(p.message_id), p.status_message_id)
                 } else if let Some(cid) = chat_id {
                     (
                         ChatId(cid),
                         reply_to_message_id.map(teloxide::types::MessageId),
+                        None,
                     )
                 } else {
                     warn!("No pending message for {message_id}, skipping");
@@ -643,18 +693,64 @@ async fn handle_outgoing(
                     }
                 }
 
-                // Send text response
+                // Send text response — edit the status message for the first
+                // chunk if one exists, send the rest as new messages.
+                // If wrapped in <html>...</html>, send with HTML parse mode.
                 if !message.is_empty() {
-                    let chunks = split_message(message, 4096);
-                    for (i, chunk) in chunks.iter().enumerate() {
+                    let (text, use_html) = if message.starts_with("<html>") && message.ends_with("</html>") {
+                        (&message[6..message.len() - 7], true)
+                    } else {
+                        (message.as_str(), false)
+                    };
+
+                    let chunks = split_message(text, 4096);
+                    let mut first_handled = false;
+
+                    if let Some(sid) = status_msg_id {
+                        let mut req = bot.edit_message_text(target_chat_id, sid, &chunks[0]);
+                        if use_html {
+                            req = req.parse_mode(teloxide::types::ParseMode::Html);
+                        }
+                        match req.await {
+                            Ok(_) => first_handled = true,
+                            Err(e) => {
+                                warn!("Failed to edit status message, sending new: {e}");
+                            }
+                        }
+                    }
+
+                    // Build InlineKeyboardButton for mini app if present
+                    let miniapp_keyboard = miniapp.as_ref().and_then(|(app_name, button_text)| {
+                        if base_url.is_empty() { return None; }
+                        let app_url = format!("{base_url}/apps/{app_name}/index.html");
+                        let url: reqwest::Url = app_url.parse().ok()?;
+                        Some(InlineKeyboardMarkup::new(vec![vec![
+                            InlineKeyboardButton::web_app(
+                                button_text,
+                                WebAppInfo { url },
+                            ),
+                        ]]))
+                    });
+
+                    let start = if first_handled { 1 } else { 0 };
+                    for (i, chunk) in chunks[start..].iter().enumerate() {
                         let mut req = bot.send_message(target_chat_id, chunk);
-                        if i == 0 {
+                        if use_html {
+                            req = req.parse_mode(teloxide::types::ParseMode::Html);
+                        }
+                        if !first_handled && i == 0 {
                             if let Some(reply_id) = target_reply_id {
                                 req = req.reply_parameters(ReplyParameters::new(reply_id));
                             }
                         }
+                        // Attach mini app button to the last chunk
+                        if i == chunks[start..].len() - 1 {
+                            if let Some(ref kb) = miniapp_keyboard {
+                                req = req.reply_markup(kb.clone());
+                            }
+                        }
                         if let Err(e) = req.await {
-                            error!("Failed to send message chunk {i}: {e}");
+                            error!("Failed to send message chunk: {e}");
                         }
                     }
                 }
