@@ -506,6 +506,7 @@ pub async fn invoke_bot(
     if continue_conversation {
         claude_args.push("-c".into());
     }
+    claude_args.extend(["--effort".into(), "high".into()]);
 
     // When streaming, use stream-json output to parse tool events
     let use_streaming = status_tx.is_some();
