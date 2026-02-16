@@ -860,6 +860,22 @@ fn handle_cron_trigger(
     }
     std::fs::rename(&tmp, &trigger_file).ok();
 
+    // Auto-delete one-shot jobs after firing
+    let recurring = job.get("recurring").and_then(|r| r.as_bool()).unwrap_or(false);
+    if !recurring {
+        info!("One-shot job {job_id}: removing from cron-jobs.json");
+        if let Ok(mut jobs_obj) = serde_json::from_str::<serde_json::Value>(
+            &std::fs::read_to_string(&jobs_file).unwrap_or_default(),
+        ) {
+            if let Some(jobs_map) = jobs_obj.get_mut("jobs").and_then(|j| j.as_object_mut()) {
+                jobs_map.remove(job_id);
+                if let Ok(updated) = serde_json::to_string_pretty(&jobs_obj) {
+                    std::fs::write(&jobs_file, updated).ok();
+                }
+            }
+        }
+    }
+
     info!("Cron trigger: {job_id} ({name}) -> @{agent_id}");
     (axum::http::StatusCode::OK, "OK")
 }
