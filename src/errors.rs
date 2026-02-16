@@ -14,12 +14,3 @@ pub enum InvokeError {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }
-
-#[derive(Error, Debug)]
-pub enum PairingError {
-    #[error("io error: {0}")]
-    Io(#[from] std::io::Error),
-
-    #[error("json error: {0}")]
-    Json(#[from] serde_json::Error),
-}

@@ -167,17 +167,32 @@ async def main():
 
     # ── Stop running process (must happen before upload to avoid "text file busy") ──
     info("Stopping tinyclaw...")
-    await sandbox.process.exec({"command": "pkill -f 'tinyclaw' 2>/dev/null; exit 0"})
+    result = await sandbox.process.exec({"command": "pkill -9 -f 'tinyclaw' 2>/dev/null; exit 0"})
+    # Poll until pkill completes, then wait for process to actually die
+    for _ in range(10):
+        await asyncio.sleep(1)
+        proc = await sandbox.process.get(result.name)
+        if proc.status and proc.status != "running":
+            break
     await asyncio.sleep(2)
     ok("Stopped")
 
     # ── Upload binary ─────────────────────────────────────────────────────
     info("Uploading binary...")
+    # Delete old binary first (write_binary can't overwrite a running binary)
+    result = await sandbox.process.exec({"command": f"rm -f {remote_dir}/tinyclaw"})
+    for _ in range(5):
+        await asyncio.sleep(1)
+        proc = await sandbox.process.get(result.name)
+        if proc.status and proc.status != "running":
+            break
     await sandbox.fs.write_binary(f"{remote_dir}/tinyclaw", str(binary))
     await sandbox.process.exec({"command": f"chmod +x {remote_dir}/tinyclaw"})
     ok(f"Binary uploaded ({binary_size:.1f}M)")
 
     # ── Upload skills ─────────────────────────────────────────────────────
+    # Skills now live at ~/.tinyclaw/skills/ on the remote
+    remote_home = "/home/tinyclaw/.tinyclaw"
     skills_dir = project_root / ".agents" / "skills"
     if skills_dir.exists():
         info("Uploading skills...")
@@ -185,7 +200,7 @@ async def main():
             if skill_file.is_file():
                 rel = skill_file.relative_to(skills_dir)
                 await sandbox.fs.write(
-                    f"{remote_dir}/.agents/skills/{rel}",
+                    f"{remote_home}/skills/{rel}",
                     skill_file.read_text(),
                 )
         ok("Skills uploaded")
@@ -219,14 +234,9 @@ async def main():
     # ── Start ─────────────────────────────────────────────────────────────
     info("Starting tinyclaw...")
 
-    # chown everything to the non-root user
+    # chown binary dir + tinyclaw home to non-root user
     await sandbox.process.exec({
-        "command": (
-            f"chown -R tinyclaw:tinyclaw {remote_dir} "
-            f"/home/user/.tinyclaw /home/user/tinyclaw-workspace 2>/dev/null; "
-            f"mkdir -p /home/user/.tinyclaw /home/user/tinyclaw-workspace && "
-            f"chown -R tinyclaw:tinyclaw /home/user/.tinyclaw /home/user/tinyclaw-workspace"
-        )
+        "command": f"chown -R tinyclaw:tinyclaw {remote_dir} {remote_home}"
     })
 
     # Start as non-root. Only runtime env vars needed: WEBHOOK_URL + WEBHOOK_PORT
@@ -253,7 +263,7 @@ async def main():
         warn("tinyclaw may not be running — check logs")
         # Try to get logs
         result = await sandbox.process.exec({
-            "command": "cat /home/user/.tinyclaw/logs/tinyclaw.log 2>/dev/null | tail -20"
+            "command": "cat /home/tinyclaw/sultana-workspace/logs/tinyclaw.log 2>/dev/null | tail -20"
         })
         await asyncio.sleep(2)
         proc_info = await sandbox.process.get(result.name)

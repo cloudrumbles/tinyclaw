@@ -1,4 +1,4 @@
-/// A message arriving from a channel (telegram, heartbeat) to the queue processor.
+/// A message arriving from a channel (telegram, cron) to the queue processor.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct IncomingMessage {
@@ -8,7 +8,6 @@ pub struct IncomingMessage {
     pub message: String,
     pub timestamp: u64,
     pub message_id: String,
-    pub agent: Option<String>,
     pub files: Vec<String>,
     pub chat_id: Option<i64>,
     pub reply_to_message_id: Option<i32>,
@@ -19,13 +18,11 @@ pub struct IncomingMessage {
 #[allow(dead_code)]
 pub enum OutgoingMessage {
     Response {
-        channel: String,
         sender: String,
         message: String,
         original_message: String,
         timestamp: u64,
         message_id: String,
-        agent: Option<String>,
         files: Vec<String>,
         chat_id: Option<i64>,
         reply_to_message_id: Option<i32>,

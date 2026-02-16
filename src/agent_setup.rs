@@ -1,23 +1,19 @@
-use std::collections::HashMap;
 use std::path::Path;
 
 use tracing::info;
 
 use crate::config;
-use crate::types::{AgentConfig, TeamConfig};
 
 // Template files embedded at compile time
 const AGENTS_MD: &str = include_str!("../templates/AGENTS.md");
 const SOUL_MD: &str = include_str!("../templates/SOUL.md");
-const HEARTBEAT_MD: &str = include_str!("../templates/heartbeat.md");
+
 
 /// Ensure persona directory exists with soul template and empty subdirs.
-/// Handles migration from old flat layout (.tinyclaw/SOUL.md in workspace).
+/// Persona lives at tinyclaw_home/{persona_id}/.
 pub fn ensure_persona(
     tinyclaw_home: &Path,
     persona_id: &str,
-    workspace_root: &Path,
-    agent_id: &str,
 ) {
     let persona = config::persona_dir(tinyclaw_home, persona_id);
     if persona.exists() {
@@ -26,78 +22,40 @@ pub fn ensure_persona(
 
     std::fs::create_dir_all(&persona).ok();
     std::fs::create_dir_all(persona.join("skills")).ok();
-    std::fs::create_dir_all(persona.join("claude-state")).ok();
+    std::fs::create_dir_all(persona.join("claude")).ok();
 
-    // Migration: move old SOUL.md from workspace if it exists
-    let old_soul = workspace_root.join(agent_id).join(".tinyclaw/SOUL.md");
-    if old_soul.exists() {
-        if std::fs::copy(&old_soul, persona.join("soul.md")).is_ok() {
-            info!("Migrated soul.md from old layout for persona {persona_id}");
-        }
-    } else {
-        std::fs::write(persona.join("soul.md"), SOUL_MD).ok();
-    }
-
-    // Migration: move old Claude CLI session data if it exists
-    let claude_home = dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join(".claude/projects");
-    let old_flat_dir = workspace_root.join(agent_id);
-    if old_flat_dir.exists() {
-        let old_hash = config::claude_project_hash(&old_flat_dir);
-        let old_session_dir = claude_home.join(&old_hash);
-        if old_session_dir.exists() && !old_session_dir.is_symlink() {
-            // Move contents into persona's claude-state
-            let claude_state = persona.join("claude-state");
-            if let Ok(entries) = std::fs::read_dir(&old_session_dir) {
-                for entry in entries.flatten() {
-                    let dest = claude_state.join(entry.file_name());
-                    if entry.path().is_dir() {
-                        // For directories like memory/, copy recursively
-                        copy_dir_recursive(&entry.path(), &dest);
-                    } else {
-                        std::fs::copy(entry.path(), &dest).ok();
-                    }
-                }
-            }
-            info!("Migrated Claude session data for persona {persona_id}");
-        }
-    }
+    std::fs::write(persona.join("soul.md"), SOUL_MD).ok();
 
     info!("Initialized persona: {persona_id}");
 }
 
 /// Ensure workspace directory exists with infrastructure scaffolding.
-/// Handles migration from old flat layout (no _meta/ dir).
+/// Workspace lives at ~/{bot_id}-workspace/ (passed as workspace_dir).
+/// Creates runtime dirs: logs/, files/, chats/.
+/// Idempotent — safe to call multiple times.
 pub fn ensure_workspace(
-    workspace_root: &Path,
-    agent_id: &str,
-    ws_name: &str,
+    workspace_dir: &Path,
     skills_source: Option<&Path>,
 ) {
-    let agent_root = workspace_root.join(agent_id);
-    let ws_dir = config::agent_workspace_dir(workspace_root, agent_id, ws_name);
+    let fresh = !workspace_dir.exists();
 
-    // Migration: if agent_root exists but has no _meta/, it's the old flat layout
-    if agent_root.exists() && !agent_root.join("_meta").exists() {
-        migrate_flat_workspace(&agent_root, ws_name);
+    std::fs::create_dir_all(workspace_dir).ok();
+
+    // Create runtime dirs (idempotent)
+    for subdir in &["logs", "files", "chats"] {
+        std::fs::create_dir_all(workspace_dir.join(subdir)).ok();
     }
-
-    if ws_dir.exists() {
-        return;
-    }
-
-    std::fs::create_dir_all(&ws_dir).ok();
-
-    // Write infrastructure files
-    std::fs::write(ws_dir.join("AGENTS.md"), AGENTS_MD).ok();
-    std::fs::write(ws_dir.join("heartbeat.md"), HEARTBEAT_MD).ok();
 
     // Create .claude dir (CLAUDE.md is assembled at invocation time)
-    let claude_dir = ws_dir.join(".claude");
+    let claude_dir = workspace_dir.join(".claude");
     std::fs::create_dir_all(&claude_dir).ok();
 
-    // Symlink infrastructure skills
+    // Write infrastructure files (only on fresh init)
+    if fresh {
+        std::fs::write(workspace_dir.join("AGENTS.md"), AGENTS_MD).ok();
+    }
+
+    // Symlink infrastructure skills (idempotent)
     if let Some(skills_src) = skills_source {
         if skills_src.exists() {
             let claude_skills = claude_dir.join("skills");
@@ -108,27 +66,18 @@ pub fn ensure_workspace(
         }
     }
 
-    // Write active workspace marker
-    let meta = agent_root.join("_meta");
-    std::fs::create_dir_all(&meta).ok();
-    std::fs::create_dir_all(meta.join("backups")).ok();
-    if !meta.join("active").exists() {
-        std::fs::write(meta.join("active"), ws_name).ok();
+    if fresh {
+        info!("Initialized workspace: {}", workspace_dir.display());
     }
-
-    info!("Initialized workspace: {agent_id}/{ws_name}");
 }
 
-/// Assemble .claude/CLAUDE.md by combining infrastructure + persona + teammates.
+/// Assemble .claude/CLAUDE.md by combining infrastructure template + persona soul.
 /// Also sets up the Claude CLI session symlink for conversation continuity.
 /// Called on every invocation (not just first run).
 pub fn assemble_claude_md(
     workspace_dir: &Path,
     tinyclaw_home: &Path,
     persona_id: &str,
-    agent_id: &str,
-    agents: &HashMap<String, AgentConfig>,
-    teams: &HashMap<String, TeamConfig>,
     infra_skills: Option<&Path>,
 ) {
     let persona = config::persona_dir(tinyclaw_home, persona_id);
@@ -165,19 +114,6 @@ pub fn assemble_claude_md(
         }
     }
 
-    // Inject teammate info
-    let teammates_start = "<!-- TEAMMATES_START -->";
-    let teammates_end = "<!-- TEAMMATES_END -->";
-    if let (Some(si), Some(ei)) = (assembled.find(teammates_start), assembled.find(teammates_end)) {
-        let block = build_teammates_block(agent_id, agents, teams);
-        assembled = format!(
-            "{}{}{}",
-            &assembled[..si + teammates_start.len()],
-            block,
-            &assembled[ei..],
-        );
-    }
-
     // Write assembled CLAUDE.md
     let claude_dir = workspace_dir.join(".claude");
     std::fs::create_dir_all(&claude_dir).ok();
@@ -190,46 +126,7 @@ pub fn assemble_claude_md(
     setup_skills(&claude_dir, infra_skills, &persona.join("skills"));
 
     // Set up Claude CLI session symlink for conversation continuity
-    setup_session_symlink(workspace_dir, &persona.join("claude-state"));
-}
-
-/// Build the teammates info block for injection into AGENTS.md.
-fn build_teammates_block(
-    agent_id: &str,
-    agents: &HashMap<String, AgentConfig>,
-    teams: &HashMap<String, TeamConfig>,
-) -> String {
-    let mut teammates: Vec<(&str, &str, &str)> = Vec::new();
-    for team in teams.values() {
-        if !team.agents.iter().any(|a| a == agent_id) {
-            continue;
-        }
-        for tid in &team.agents {
-            if tid == agent_id {
-                continue;
-            }
-            if let Some(agent) = agents.get(tid.as_str()) {
-                if !teammates.iter().any(|(id, _, _)| *id == tid.as_str()) {
-                    teammates.push((tid, &agent.name, &agent.model));
-                }
-            }
-        }
-    }
-
-    let mut block = String::new();
-    if let Some(self_agent) = agents.get(agent_id) {
-        block.push_str(&format!(
-            "\n### You\n\n- `@{agent_id}` — **{}** ({})\n",
-            self_agent.name, self_agent.model
-        ));
-    }
-    if !teammates.is_empty() {
-        block.push_str("\n### Your Teammates\n\n");
-        for (id, name, model) in &teammates {
-            block.push_str(&format!("- `@{id}` — **{name}** ({model})\n"));
-        }
-    }
-    block
+    setup_session_symlink(workspace_dir, &persona.join("claude"));
 }
 
 /// Set up skills directory by symlinking individual skill dirs from both
@@ -250,7 +147,7 @@ fn setup_skills(claude_dir: &Path, infra_skills: Option<&Path>, persona_skills: 
         symlink_skill_entries(infra, &skills_dir);
     }
 
-    // Symlink individual persona skills (agent-created)
+    // Symlink individual persona skills (bot-created)
     if persona_skills.exists() {
         symlink_skill_entries(persona_skills, &skills_dir);
     }
@@ -334,39 +231,4 @@ fn copy_dir_recursive(src: &Path, dst: &Path) {
             std::fs::copy(entry.path(), &dest).ok();
         }
     }
-}
-
-/// Migrate old flat workspace layout to nested layout.
-/// old: ~/tinyclaw-workspace/sultana/{files...}
-/// new: ~/tinyclaw-workspace/sultana/default/{files...} + _meta/active
-fn migrate_flat_workspace(agent_root: &Path, ws_name: &str) {
-    let ws_dir = agent_root.join(ws_name);
-    let tmp = agent_root.with_file_name(format!(
-        ".{}_migrate_tmp",
-        agent_root.file_name().unwrap_or_default().to_string_lossy()
-    ));
-
-    // Move everything to a temp dir, then back into the workspace subdir
-    if std::fs::rename(agent_root, &tmp).is_err() {
-        return;
-    }
-    std::fs::create_dir_all(&ws_dir).ok();
-
-    if let Ok(entries) = std::fs::read_dir(&tmp) {
-        for entry in entries.flatten() {
-            let dest = ws_dir.join(entry.file_name());
-            std::fs::rename(entry.path(), &dest).ok();
-        }
-    }
-    std::fs::remove_dir_all(&tmp).ok();
-
-    // Create _meta
-    let meta = agent_root.join("_meta");
-    std::fs::create_dir_all(meta.join("backups")).ok();
-    std::fs::write(meta.join("active"), ws_name).ok();
-
-    info!(
-        "Migrated flat workspace to nested layout: {}",
-        agent_root.display()
-    );
 }

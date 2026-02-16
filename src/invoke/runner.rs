@@ -11,7 +11,7 @@ use tracing::{info, warn, error};
 use crate::agent_setup::{ensure_persona, ensure_workspace, assemble_claude_md};
 use crate::config;
 use crate::errors::InvokeError;
-use crate::types::{AgentConfig, TeamConfig, resolve_claude_model, resolve_codex_model};
+use crate::types::{BotConfig, resolve_claude_model};
 
 /// Default idle timeout: kill the process if no output for this long.
 /// Claude CLI goes silent during extended thinking and tool use, so this
@@ -441,154 +441,89 @@ async fn run_claude_streaming(
     }
 }
 
-/// Invoke a single agent with a message. Contains all Claude/Codex invocation logic.
-pub async fn invoke_agent(
-    agent: &AgentConfig,
-    agent_id: &str,
+/// Invoke the bot with a message. Contains all Claude/Codex invocation logic.
+pub async fn invoke_bot(
+    bot: &BotConfig,
     message: &str,
-    workspace_path: &Path,
     tinyclaw_home: &Path,
     should_reset: bool,
-    agents: &HashMap<String, AgentConfig>,
-    teams: &HashMap<String, TeamConfig>,
     skills_source: Option<&Path>,
     status_tx: Option<mpsc::Sender<String>>,
 ) -> Result<String, InvokeError> {
     let t_invoke = std::time::Instant::now();
 
     // Resolve persona and workspace
-    let persona_id = agent.persona.as_deref().unwrap_or(agent_id).to_string();
-    let ws_name = agent.workspace.as_deref()
-        .map(String::from)
-        .unwrap_or_else(|| config::active_workspace(workspace_path, agent_id));
-    let workspace_dir = config::agent_workspace_dir(workspace_path, agent_id, &ws_name);
+    let persona_id = bot.persona.as_deref().unwrap_or(&bot.bot_id).to_string();
+    let workspace_dir = config::bot_workspace(&bot.bot_id);
 
-    // Set up three layers: persona, workspace, assembled CLAUDE.md (blocking FS ops)
+    // Set up persona, workspace, and assembled CLAUDE.md (blocking FS ops)
     {
         let home = tinyclaw_home.to_path_buf();
-        let ws_root = workspace_path.to_path_buf();
         let ws_dir = workspace_dir.clone();
         let pid = persona_id.clone();
-        let aid = agent_id.to_string();
         let ss = skills_source.map(PathBuf::from);
-        let agents_clone = agents.clone();
-        let teams_clone = teams.clone();
 
         tokio::task::spawn_blocking(move || {
-            ensure_persona(&home, &pid, &ws_root, &aid);
-            ensure_workspace(&ws_root, &aid, &ws_name, ss.as_deref());
-            assemble_claude_md(&ws_dir, &home, &pid, &aid, &agents_clone, &teams_clone, ss.as_deref());
+            ensure_persona(&home, &pid);
+            ensure_workspace(&ws_dir, ss.as_deref());
+            assemble_claude_md(&ws_dir, &home, &pid, ss.as_deref());
         })
         .await
         .ok();
     }
-    info!("[timing] agent_setup: {:?}", t_invoke.elapsed());
+    info!("[timing] bot_setup: {:?}", t_invoke.elapsed());
 
     // Working directory is the active workspace
     let working_dir = workspace_dir;
 
-    let idle_timeout = agent
+    let idle_timeout = bot
         .timeout
         .map(Duration::from_secs)
         .unwrap_or(DEFAULT_IDLE_TIMEOUT);
 
-    let provider = if agent.provider.is_empty() {
-        "anthropic"
+    let bot_id = &bot.bot_id;
+
+    info!("Using Claude provider (bot: {bot_id})");
+
+    let continue_conversation = !should_reset;
+    if should_reset {
+        info!("Resetting conversation for bot: {bot_id}");
+    }
+
+    let model_id = resolve_claude_model(&bot.model);
+    let mut claude_args: Vec<String> = vec!["--dangerously-skip-permissions".into()];
+    if !model_id.is_empty() {
+        claude_args.extend(["--model".into(), model_id.to_string()]);
+    }
+    if continue_conversation {
+        claude_args.push("-c".into());
+    }
+
+    // When streaming, use stream-json output to parse tool events
+    let use_streaming = status_tx.is_some();
+    if use_streaming {
+        claude_args.extend([
+            "--output-format".into(),
+            "stream-json".into(),
+            "--verbose".into(),
+            "--include-partial-messages".into(),
+        ]);
+    }
+
+    claude_args.extend(["-p".into(), message.to_string()]);
+
+    let args_refs: Vec<&str> = claude_args.iter().map(|s| s.as_str()).collect();
+    info!("[timing] pre-claude: {:?}", t_invoke.elapsed());
+
+    let result = if let Some(tx) = status_tx {
+        run_claude_streaming("claude", &args_refs, Some(&working_dir), idle_timeout, tx).await
     } else {
-        &agent.provider
+        run_command("claude", &args_refs, Some(&working_dir), idle_timeout).await
     };
 
-    if provider == "openai" {
-        info!("Using Codex CLI (agent: {agent_id})");
-
-        let should_resume = !should_reset;
-        if should_reset {
-            info!("Resetting Codex conversation for agent: {agent_id}");
-        }
-
-        let model_id = resolve_codex_model(&agent.model);
-        let mut codex_args: Vec<String> = vec!["exec".into()];
-        if should_resume {
-            codex_args.extend(["resume".into(), "--last".into()]);
-        }
-        if !model_id.is_empty() {
-            codex_args.extend(["--model".into(), model_id.to_string()]);
-        }
-        codex_args.extend([
-            "--skip-git-repo-check".into(),
-            "--dangerously-bypass-approvals-and-sandbox".into(),
-            "--json".into(),
-            message.to_string(),
-        ]);
-
-        let args_refs: Vec<&str> = codex_args.iter().map(|s| s.as_str()).collect();
-        let codex_output = run_command("codex", &args_refs, Some(&working_dir), idle_timeout).await?;
-
-        // Parse JSONL output and extract final agent_message
-        let mut response = String::new();
-        for line in codex_output.lines() {
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
-                if json.get("type").and_then(|t| t.as_str()) == Some("item.completed") {
-                    if let Some(item) = json.get("item") {
-                        if item.get("type").and_then(|t| t.as_str()) == Some("agent_message") {
-                            if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
-                                response = text.to_string();
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if response.is_empty() {
-            Ok("Sorry, I could not generate a response from Codex.".into())
-        } else {
-            Ok(response)
-        }
-    } else {
-        // Default to Claude (Anthropic)
-        info!("Using Claude provider (agent: {agent_id})");
-
-        let continue_conversation = !should_reset;
-        if should_reset {
-            info!("Resetting conversation for agent: {agent_id}");
-        }
-
-        let model_id = resolve_claude_model(&agent.model);
-        let mut claude_args: Vec<String> = vec!["--dangerously-skip-permissions".into()];
-        if !model_id.is_empty() {
-            claude_args.extend(["--model".into(), model_id.to_string()]);
-        }
-        if continue_conversation {
-            claude_args.push("-c".into());
-        }
-
-        // When streaming, use stream-json output to parse tool events
-        let use_streaming = status_tx.is_some();
-        if use_streaming {
-            claude_args.extend([
-                "--output-format".into(),
-                "stream-json".into(),
-                "--verbose".into(),
-                "--include-partial-messages".into(),
-            ]);
-        }
-
-        claude_args.extend(["-p".into(), message.to_string()]);
-
-        let args_refs: Vec<&str> = claude_args.iter().map(|s| s.as_str()).collect();
-        info!("[timing] pre-claude: {:?}", t_invoke.elapsed());
-
-        let result = if let Some(tx) = status_tx {
-            run_claude_streaming("claude", &args_refs, Some(&working_dir), idle_timeout, tx).await
-        } else {
-            run_command("claude", &args_refs, Some(&working_dir), idle_timeout).await
-        };
-
-        info!("[timing] claude_cli: {:?}", t_invoke.elapsed());
-        result.map_err(|e| {
-            error!("Claude error (agent: {agent_id}): {e}");
-            e
-        })
-    }
+    info!("[timing] claude_cli: {:?}", t_invoke.elapsed());
+    result.map_err(|e| {
+        error!("Claude error (bot: {bot_id}): {e}");
+        e
+    })
 }

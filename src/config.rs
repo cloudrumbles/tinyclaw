@@ -1,13 +1,8 @@
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use tracing::info;
 
-use crate::pairing::{PairingApprovedEntry, PairingState, save_pairing_state};
-use crate::types::{
-    AgentConfig, ChannelsConfig, MonitoringConfig, Settings, TeamConfig, TelegramChannelConfig,
-    WorkspaceConfig,
-};
+use crate::types::{BotConfig, ChannelsConfig, Settings, TelegramChannelConfig};
 
 /// Resolve TINYCLAW_HOME: TINYCLAW_HOME env var > local `.tinyclaw/` > `~/.tinyclaw/`.
 pub fn resolve_tinyclaw_home() -> PathBuf {
@@ -29,39 +24,23 @@ pub fn settings_file(tinyclaw_home: &Path) -> PathBuf {
     tinyclaw_home.join("settings.json")
 }
 
-pub fn chats_dir(tinyclaw_home: &Path) -> PathBuf {
-    tinyclaw_home.join("chats")
+pub fn files_dir(workspace_dir: &Path) -> PathBuf {
+    workspace_dir.join("files")
 }
 
-pub fn pairing_file(tinyclaw_home: &Path) -> PathBuf {
-    tinyclaw_home.join("pairing.json")
-}
-
-pub fn files_dir(tinyclaw_home: &Path) -> PathBuf {
-    tinyclaw_home.join("files")
-}
-
-pub fn reset_flag(tinyclaw_home: &Path) -> PathBuf {
-    tinyclaw_home.join("reset_flag")
+pub fn reset_flag(workspace_dir: &Path) -> PathBuf {
+    workspace_dir.join("reset_flag")
 }
 
 pub fn persona_dir(tinyclaw_home: &Path, persona_id: &str) -> PathBuf {
-    tinyclaw_home.join("personas").join(persona_id)
+    tinyclaw_home.join(persona_id)
 }
 
-/// Resolve the workspace directory for a specific agent + workspace name.
-pub fn agent_workspace_dir(workspace_root: &Path, agent_id: &str, ws_name: &str) -> PathBuf {
-    workspace_root.join(agent_id).join(ws_name)
-}
-
-/// Read the active workspace name from _meta/active, defaulting to "default".
-pub fn active_workspace(workspace_root: &Path, agent_id: &str) -> String {
-    let meta = workspace_root.join(agent_id).join("_meta").join("active");
-    std::fs::read_to_string(&meta)
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "default".to_string())
+/// Resolve the workspace directory for the bot: ~/{bot_id}-workspace/
+pub fn bot_workspace(bot_id: &str) -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(format!("{bot_id}-workspace"))
 }
 
 /// Compute the Claude CLI project directory path hash for a given workspace dir.
@@ -72,13 +51,10 @@ pub fn claude_project_hash(workspace_dir: &Path) -> String {
     canonical.to_string_lossy().replace('/', "-")
 }
 
-/// Bootstrap tinyclaw home directory with all required subdirectories
-/// and default config files (only writes files that don't already exist).
+/// Bootstrap tinyclaw home directory with default config files (only writes files
+/// that don't already exist). Per-persona dirs are created by ensure_persona.
 pub fn bootstrap(tinyclaw_home: &Path) {
-    // Create all required directories
-    for subdir in &["logs", "files", "chats", "cron-inbox", "personas"] {
-        std::fs::create_dir_all(tinyclaw_home.join(subdir)).ok();
-    }
+    std::fs::create_dir_all(tinyclaw_home).ok();
 
     // Write default settings.json if missing
     let settings_path = settings_file(tinyclaw_home);
@@ -89,56 +65,22 @@ pub fn bootstrap(tinyclaw_home: &Path) {
             info!("Bootstrapped settings.json");
         }
     }
-
-    // Write default pairing.json if missing
-    let pairing_path = pairing_file(tinyclaw_home);
-    if !pairing_path.exists() {
-        let state = hardcoded_pairing();
-        let _ = save_pairing_state(&pairing_path, &state);
-        info!("Bootstrapped pairing.json");
-    }
 }
 
 /// Hardcoded default settings baked into the binary.
 fn hardcoded_settings() -> Settings {
-    let mut agents = HashMap::new();
-    agents.insert(
-        "sultana".to_string(),
-        AgentConfig {
-            name: "Sultana".to_string(),
-            provider: "anthropic".to_string(),
-            model: "opus".to_string(),
-            working_directory: "sultana".to_string(),
-            timeout: None,
-            persona: None,
-            workspace: None,
-        },
-    );
-
     Settings {
-        workspace: Some(WorkspaceConfig { path: None }),
         channels: Some(ChannelsConfig {
             telegram: Some(TelegramChannelConfig { bot_token: None }),
         }),
-        agents: Some(agents),
-        teams: None,
-        monitoring: Some(MonitoringConfig {
-            heartbeat_interval: Some(7200),
+        bot: Some(BotConfig {
+            name: "Sultana".to_string(),
+            bot_id: "sultana".to_string(),
+            provider: "anthropic".to_string(),
+            model: "opus".to_string(),
+            timeout: None,
+            persona: None,
         }),
-    }
-}
-
-/// Hardcoded default pairing with Shah pre-approved.
-fn hardcoded_pairing() -> PairingState {
-    PairingState {
-        pending: vec![],
-        approved: vec![PairingApprovedEntry {
-            channel: "telegram".to_string(),
-            sender_id: "525365593".to_string(),
-            sender: "Shah".to_string(),
-            approved_at: 0,
-            approved_code: Some("HARDCODED".to_string()),
-        }],
     }
 }
 
@@ -154,34 +96,19 @@ pub fn get_settings(tinyclaw_home: &Path) -> Settings {
 
 fn default_settings() -> Settings {
     Settings {
-        workspace: None,
         channels: None,
-        agents: None,
-        teams: None,
-        monitoring: None,
+        bot: None,
     }
 }
 
-/// Get all configured agents. Agents must be defined in settings.json.
-pub fn get_agents(settings: &Settings) -> HashMap<String, AgentConfig> {
-    settings.agents.clone().unwrap_or_default()
-}
-
-/// Get all configured teams.
-pub fn get_teams(settings: &Settings) -> HashMap<String, TeamConfig> {
-    settings.teams.clone().unwrap_or_default()
-}
-
-/// Resolve the workspace path from settings, defaulting to ~/tinyclaw-workspace.
-pub fn workspace_path(settings: &Settings) -> PathBuf {
-    settings
-        .workspace
-        .as_ref()
-        .and_then(|w| w.path.as_deref())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join("tinyclaw-workspace")
-        })
+/// Get the bot config from settings. Returns a hardcoded default if not set.
+pub fn get_bot_config(settings: &Settings) -> BotConfig {
+    settings.bot.clone().unwrap_or_else(|| BotConfig {
+        name: "Sultana".to_string(),
+        bot_id: "sultana".to_string(),
+        provider: "anthropic".to_string(),
+        model: "opus".to_string(),
+        timeout: None,
+        persona: None,
+    })
 }

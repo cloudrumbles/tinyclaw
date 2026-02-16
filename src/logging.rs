@@ -7,8 +7,8 @@ use tracing_subscriber::util::SubscriberInitExt;
 /// Initialize tracing with file output + stderr.
 /// Returns a guard that must be held for the lifetime of the program
 /// (dropping it flushes the log file).
-pub fn init_logging(tinyclaw_home: &Path) -> WorkerGuard {
-    let log_dir = tinyclaw_home.join("logs");
+pub fn init_logging(workspace_dir: &Path) -> WorkerGuard {
+    let log_dir = workspace_dir.join("logs");
     std::fs::create_dir_all(&log_dir).ok();
 
     let file_appender = tracing_appender::rolling::never(&log_dir, "tinyclaw.log");

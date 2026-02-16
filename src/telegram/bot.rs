@@ -16,11 +16,11 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::config;
-use crate::pairing::ensure_sender_paired;
 use crate::queue::{IncomingMessage, OutgoingMessage};
 use crate::telegram::files::{
     build_unique_file_path, ensure_file_extension, ext_from_mime, split_message,
 };
+use crate::telegram::markdown::markdown_to_telegram_html;
 
 /// Pending message info for matching responses to original messages.
 struct PendingMessage {
@@ -50,11 +50,13 @@ pub async fn run_telegram(
         }
     }
 
-    let files_dir = config::files_dir(&tinyclaw_home);
-    std::fs::create_dir_all(&files_dir).ok();
+    // Resolve the bot's workspace for files, miniapps, cron
+    let settings = config::get_settings(&tinyclaw_home);
+    let bot_config = config::get_bot_config(&settings);
+    let default_workspace = config::bot_workspace(&bot_config.bot_id);
 
-    let pairing_file = config::pairing_file(&tinyclaw_home);
-    let settings_file = config::settings_file(&tinyclaw_home);
+    let files_dir = config::files_dir(&default_workspace);
+    std::fs::create_dir_all(&files_dir).ok();
 
     // Shared state for pending messages
     let pending: Arc<Mutex<HashMap<String, PendingMessage>>> =
@@ -101,10 +103,10 @@ pub async fn run_telegram(
     let incoming_tx = Arc::new(incoming_tx);
     let pending_in = pending.clone();
     let files_dir = Arc::new(files_dir);
-    let pairing_file = Arc::new(pairing_file);
-    let settings_file = Arc::new(settings_file);
-    let tinyclaw_home = Arc::new(tinyclaw_home);
-    let cron_home = tinyclaw_home.clone();
+    let default_workspace = Arc::new(default_workspace);
+    let cron_home = default_workspace.clone();
+    let miniapps_home = default_workspace.clone();
+    let cron_tx = incoming_tx.clone();
     let bot_clone = bot.clone();
 
     let handler = Update::filter_message().endpoint(
@@ -112,9 +114,7 @@ pub async fn run_telegram(
             let tx = incoming_tx.clone();
             let pending = pending_in.clone();
             let files_dir = files_dir.clone();
-            let pairing_file = pairing_file.clone();
-            let settings_file = settings_file.clone();
-            let tinyclaw_home = tinyclaw_home.clone();
+            let default_workspace = default_workspace.clone();
             async move {
                 handle_incoming_message(
                     &bot,
@@ -122,9 +122,7 @@ pub async fn run_telegram(
                     &tx,
                     &pending,
                     &files_dir,
-                    &pairing_file,
-                    &settings_file,
-                    &tinyclaw_home,
+                    &default_workspace,
                 )
                 .await;
                 respond(())
@@ -148,10 +146,8 @@ pub async fn run_telegram(
                 .await
                 .expect("Failed to set up webhook");
 
-        // Serve mini apps from ~/.tinyclaw/miniapps/
-        let miniapps_dir = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".tinyclaw/miniapps");
+        // Serve mini apps from the default agent's workspace
+        let miniapps_dir = miniapps_home.join("miniapps");
         std::fs::create_dir_all(&miniapps_dir).ok();
 
         // Add /cron/{job_id} route for cron-job.org triggers
@@ -163,7 +159,8 @@ pub async fn run_telegram(
                     let home = cron_home;
                     move |AxumPath(job_id): AxumPath<String>| {
                         let home = home.clone();
-                        async move { handle_cron_trigger(&home, &job_id) }
+                        let tx = cron_tx.clone();
+                        async move { handle_cron_trigger(&home, &job_id, &*tx).await }
                     }
                 }),
             )
@@ -202,9 +199,7 @@ async fn handle_incoming_message(
     incoming_tx: &mpsc::Sender<IncomingMessage>,
     pending: &Arc<Mutex<HashMap<String, PendingMessage>>>,
     files_dir: &Path,
-    pairing_file: &Path,
-    settings_file: &Path,
-    tinyclaw_home: &Path,
+    default_workspace: &Path,
 ) {
     // Only handle private chats
     if !msg.chat.is_private() {
@@ -248,65 +243,11 @@ async fn handle_incoming_message(
         }
     );
 
-    // Check pairing
-    let pairing = {
-        let pf = pairing_file.to_path_buf();
-        let ch = "telegram".to_string();
-        let sid = sender_id.clone();
-        let sname = sender.clone();
-        tokio::task::spawn_blocking(move || ensure_sender_paired(&pf, &ch, &sid, &sname))
-            .await
-            .unwrap()
-    };
-
-    if !pairing.approved {
-        if let Some(code) = &pairing.code {
-            if pairing.is_new_pending {
-                info!("Blocked unpaired sender {sender} ({sender_id}) with code {code}");
-                let text = format!(
-                    "This sender is not paired yet.\nYour pairing code: {code}\n\
-                     Ask the TinyClaw owner to approve you with:\ntinyclaw pairing approve {code}"
-                );
-                let _ = bot
-                    .send_message(chat_id, text)
-                    .reply_parameters(ReplyParameters::new(msg_id))
-                    .await;
-            } else {
-                info!("Blocked pending sender {sender} ({sender_id})");
-            }
-        }
-        return;
-    }
-
-    // Handle /agent command
-    if message_text.trim().eq_ignore_ascii_case("/agent")
-        || message_text.trim().eq_ignore_ascii_case("!agent")
-    {
-        let text = get_agent_list_text(settings_file);
-        let _ = bot
-            .send_message(chat_id, text)
-            .reply_parameters(ReplyParameters::new(msg_id))
-            .await;
-        return;
-    }
-
-    // Handle /team command
-    if message_text.trim().eq_ignore_ascii_case("/team")
-        || message_text.trim().eq_ignore_ascii_case("!team")
-    {
-        let text = get_team_list_text(settings_file);
-        let _ = bot
-            .send_message(chat_id, text)
-            .reply_parameters(ReplyParameters::new(msg_id))
-            .await;
-        return;
-    }
-
     // Handle /reset command
     if message_text.trim().eq_ignore_ascii_case("/reset")
         || message_text.trim().eq_ignore_ascii_case("!reset")
     {
-        let reset_path = config::reset_flag(tinyclaw_home);
+        let reset_path = config::reset_flag(default_workspace);
         std::fs::write(&reset_path, "reset").ok();
         let _ = bot
             .send_message(
@@ -384,7 +325,6 @@ async fn handle_incoming_message(
         message: full_message,
         timestamp: now_millis(),
         message_id: queue_message_id,
-        agent: None,
         files: downloaded_files,
         chat_id: Some(chat_id.0),
         reply_to_message_id: Some(msg_id.0),
@@ -646,27 +586,16 @@ async fn handle_outgoing(
                 }
             }
             OutgoingMessage::Response {
-                ref channel,
                 ref sender,
                 ref message,
-                original_message: _,
-                timestamp: _,
                 ref message_id,
-                ref agent,
                 ref files,
                 chat_id,
                 reply_to_message_id,
                 ref miniapp,
+                ..
             } => {
-                // Heartbeat responses don't go to telegram
-                if channel == "heartbeat" {
-                    info!(
-                        "Heartbeat response from @{}: {} chars",
-                        agent.as_deref().unwrap_or("?"),
-                        message.len()
-                    );
-                    continue;
-                }
+
 
                 let mut map = pending.lock().await;
                 let entry = map.remove(message_id);
@@ -695,29 +624,20 @@ async fn handle_outgoing(
 
                 // Send text response — edit the status message for the first
                 // chunk if one exists, send the rest as new messages.
-                // If wrapped in <html>...</html>, send with HTML parse mode.
+                // Split mixed content into plain text and <html>...</html> segments.
+                // Plain text segments get markdown→HTML conversion so everything
+                // is sent with ParseMode::Html.
                 if !message.is_empty() {
-                    let (text, use_html) = if message.starts_with("<html>") && message.ends_with("</html>") {
-                        (&message[6..message.len() - 7], true)
-                    } else {
-                        (message.as_str(), false)
-                    };
-
-                    let chunks = split_message(text, 4096);
-                    let mut first_handled = false;
-
-                    if let Some(sid) = status_msg_id {
-                        let mut req = bot.edit_message_text(target_chat_id, sid, &chunks[0]);
-                        if use_html {
-                            req = req.parse_mode(teloxide::types::ParseMode::Html);
-                        }
-                        match req.await {
-                            Ok(_) => first_handled = true,
-                            Err(e) => {
-                                warn!("Failed to edit status message, sending new: {e}");
+                    let segments: Vec<(String, bool)> = split_html_segments(message)
+                        .into_iter()
+                        .map(|(text, is_html)| {
+                            if is_html {
+                                (text, true)
+                            } else {
+                                (markdown_to_telegram_html(&text), true)
                             }
-                        }
-                    }
+                        })
+                        .collect();
 
                     // Build InlineKeyboardButton for mini app if present
                     let miniapp_keyboard = miniapp.as_ref().and_then(|(app_name, button_text)| {
@@ -732,25 +652,54 @@ async fn handle_outgoing(
                         ]]))
                     });
 
-                    let start = if first_handled { 1 } else { 0 };
-                    for (i, chunk) in chunks[start..].iter().enumerate() {
-                        let mut req = bot.send_message(target_chat_id, chunk);
-                        if use_html {
-                            req = req.parse_mode(teloxide::types::ParseMode::Html);
-                        }
-                        if !first_handled && i == 0 {
-                            if let Some(reply_id) = target_reply_id {
-                                req = req.reply_parameters(ReplyParameters::new(reply_id));
+                    let mut first_handled = false;
+                    let total_segments = segments.len();
+
+                    for (seg_idx, (seg_text, use_html)) in segments.iter().enumerate() {
+                        let chunks = split_message(seg_text, 4096);
+                        let is_last_segment = seg_idx == total_segments - 1;
+
+                        // Try to edit the status message for the very first chunk
+                        let start = if !first_handled && status_msg_id.is_some() {
+                            let sid = status_msg_id.unwrap();
+                            let mut req = bot.edit_message_text(target_chat_id, sid, &chunks[0]);
+                            if *use_html {
+                                req = req.parse_mode(teloxide::types::ParseMode::Html);
                             }
-                        }
-                        // Attach mini app button to the last chunk
-                        if i == chunks[start..].len() - 1 {
-                            if let Some(ref kb) = miniapp_keyboard {
-                                req = req.reply_markup(kb.clone());
+                            match req.await {
+                                Ok(_) => {
+                                    first_handled = true;
+                                    1
+                                }
+                                Err(e) => {
+                                    warn!("Failed to edit status message, sending new: {e}");
+                                    0
+                                }
                             }
-                        }
-                        if let Err(e) = req.await {
-                            error!("Failed to send message chunk: {e}");
+                        } else {
+                            0
+                        };
+
+                        for (i, chunk) in chunks[start..].iter().enumerate() {
+                            let mut req = bot.send_message(target_chat_id, chunk);
+                            if *use_html {
+                                req = req.parse_mode(teloxide::types::ParseMode::Html);
+                            }
+                            if !first_handled && i == 0 {
+                                first_handled = true;
+                                if let Some(reply_id) = target_reply_id {
+                                    req = req.reply_parameters(ReplyParameters::new(reply_id));
+                                }
+                            }
+                            // Attach mini app button to the last chunk of the last segment
+                            if is_last_segment && i == chunks[start..].len() - 1 {
+                                if let Some(ref kb) = miniapp_keyboard {
+                                    req = req.reply_markup(kb.clone());
+                                }
+                            }
+                            if let Err(e) = req.await {
+                                error!("Failed to send message chunk: {e}");
+                            }
                         }
                     }
                 }
@@ -810,89 +759,49 @@ async fn send_file(
     Ok(())
 }
 
-/// Get formatted agent list for /agent command.
-fn get_agent_list_text(settings_file: &Path) -> String {
-    let Ok(data) = std::fs::read_to_string(settings_file) else {
-        return "Could not load agent configuration.".into();
-    };
-    let Ok(settings) = serde_json::from_str::<serde_json::Value>(&data) else {
-        return "Could not load agent configuration.".into();
-    };
+/// Split a message into segments of (text, is_html).
+/// Plain text outside <html>...</html> tags becomes (text, false).
+/// Content inside <html>...</html> tags becomes (content, true).
+fn split_html_segments(message: &str) -> Vec<(String, bool)> {
+    let mut segments = Vec::new();
+    let mut remaining = message;
 
-    let agents = settings.get("agents").and_then(|a| a.as_object());
-    let Some(agents) = agents else {
-        return "No agents configured. Using default single-agent mode.\n\n\
-                Configure agents in .tinyclaw/settings.json or run: tinyclaw agent add"
-            .into();
-    };
+    while let Some(start) = remaining.find("<html>") {
+        // Plain text before the <html> tag
+        let before = remaining[..start].trim();
+        if !before.is_empty() {
+            segments.push((before.to_string(), false));
+        }
+        remaining = &remaining[start + 6..];
 
-    if agents.is_empty() {
-        return "No agents configured. Using default single-agent mode.\n\n\
-                Configure agents in .tinyclaw/settings.json or run: tinyclaw agent add"
-            .into();
+        if let Some(end) = remaining.find("</html>") {
+            let html = remaining[..end].trim();
+            if !html.is_empty() {
+                segments.push((html.to_string(), true));
+            }
+            remaining = &remaining[end + 7..];
+        } else {
+            // No closing tag — treat rest as HTML
+            let html = remaining.trim();
+            if !html.is_empty() {
+                segments.push((html.to_string(), true));
+            }
+            remaining = "";
+        }
     }
 
-    let mut text = String::from("Available Agents:\n");
-    for (id, agent) in agents {
-        let name = agent.get("name").and_then(|n| n.as_str()).unwrap_or("?");
-        let provider = agent
-            .get("provider")
-            .and_then(|p| p.as_str())
-            .unwrap_or("?");
-        let model = agent.get("model").and_then(|m| m.as_str()).unwrap_or("?");
-        let wd = agent
-            .get("working_directory")
-            .and_then(|w| w.as_str())
-            .unwrap_or("?");
-        text.push_str(&format!("\n@{id} - {name}"));
-        text.push_str(&format!("\n  Provider: {provider}/{model}"));
-        text.push_str(&format!("\n  Directory: {wd}"));
-    }
-    text.push_str("\n\nUsage: Start your message with @agent_id to route to a specific agent.");
-    text
-}
-
-/// Get formatted team list for /team command.
-fn get_team_list_text(settings_file: &Path) -> String {
-    let Ok(data) = std::fs::read_to_string(settings_file) else {
-        return "Could not load team configuration.".into();
-    };
-    let Ok(settings) = serde_json::from_str::<serde_json::Value>(&data) else {
-        return "Could not load team configuration.".into();
-    };
-
-    let teams = settings.get("teams").and_then(|t| t.as_object());
-    let Some(teams) = teams else {
-        return "No teams configured.\n\nCreate a team with: tinyclaw team add".into();
-    };
-
-    if teams.is_empty() {
-        return "No teams configured.\n\nCreate a team with: tinyclaw team add".into();
+    // Remaining plain text after last </html>
+    let after = remaining.trim();
+    if !after.is_empty() {
+        segments.push((after.to_string(), false));
     }
 
-    let mut text = String::from("Available Teams:\n");
-    for (id, team) in teams {
-        let name = team.get("name").and_then(|n| n.as_str()).unwrap_or("?");
-        let agents = team
-            .get("agents")
-            .and_then(|a| a.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            })
-            .unwrap_or_default();
-        let leader = team
-            .get("leader_agent")
-            .and_then(|l| l.as_str())
-            .unwrap_or("?");
-        text.push_str(&format!("\n@{id} - {name}"));
-        text.push_str(&format!("\n  Agents: {agents}"));
-        text.push_str(&format!("\n  Leader: @{leader}"));
+    // If no segments found, return the whole message as plain text
+    if segments.is_empty() {
+        segments.push((message.to_string(), false));
     }
-    text.push_str("\n\nUsage: Start your message with @team_id to route to a team.");
-    text
+
+    segments
 }
 
 fn now_millis() -> u64 {
@@ -903,10 +812,11 @@ fn now_millis() -> u64 {
 }
 
 /// Handle GET /cron/:job_id — triggered by cron-job.org.
-/// Reads job config from cron-jobs.json, writes a trigger file to cron-inbox/.
-fn handle_cron_trigger(
+/// Reads job config from cron-jobs.json and injects directly into the message queue.
+async fn handle_cron_trigger(
     tinyclaw_home: &Path,
     job_id: &str,
+    incoming_tx: &mpsc::Sender<IncomingMessage>,
 ) -> (axum::http::StatusCode, &'static str) {
     let jobs_file = tinyclaw_home.join("cron-jobs.json");
 
@@ -924,7 +834,6 @@ fn handle_cron_trigger(
     };
 
     let name = job.get("name").and_then(|n| n.as_str()).unwrap_or("Cron Job");
-    let agent_id = job.get("agent_id").and_then(|a| a.as_str()).unwrap_or("sultana");
     let prompt = job.get("prompt").and_then(|p| p.as_str()).unwrap_or("");
 
     // chat_id may be stored as string or number
@@ -932,29 +841,32 @@ fn handle_cron_trigger(
         .get("chat_id")
         .and_then(|c| c.as_i64().or_else(|| c.as_str().and_then(|s| s.parse().ok())));
 
-    let mut trigger = serde_json::json!({
-        "name": name,
-        "agent_id": agent_id,
-        "job_id": job_id,
-        "prompt": prompt,
-    });
-    if let Some(cid) = chat_id {
-        trigger["chat_id"] = serde_json::json!(cid);
-    }
+    let now_millis = now_millis();
+    let rand_val: u32 = rand::random();
 
-    // Write trigger file atomically to cron-inbox
-    let inbox_dir = tinyclaw_home.join("cron-inbox");
-    let trigger_file = inbox_dir.join(format!("{job_id}.json"));
-    let tmp = inbox_dir.join(format!("{job_id}.json.tmp"));
+    let now_sgt = chrono::Utc::now()
+        .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap());
+    let ts = now_sgt.format("%Y-%m-%d %H:%M:%S SGT");
+    let message = format!("[{ts}] [CRON JOB: {name}]\n{prompt}");
+    let message_id = format!("cron_{job_id}_{now_millis}_{rand_val:08x}");
 
-    let Ok(data) = serde_json::to_string_pretty(&trigger) else {
-        return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Serialize failed");
+    let msg = IncomingMessage {
+        channel: "telegram".into(),
+        sender: "Cron".into(),
+        sender_id: chat_id.map(|c| c.to_string()).unwrap_or_else(|| format!("cron_{job_id}")),
+        message,
+        timestamp: now_millis,
+        message_id: message_id.clone(),
+        files: vec![],
+        chat_id,
+        reply_to_message_id: None,
     };
 
-    if std::fs::write(&tmp, &data).is_err() {
-        return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Write failed");
+    info!("Cron trigger: {job_id} ({name})");
+    if incoming_tx.send(msg).await.is_err() {
+        error!("Failed to inject cron message for job {job_id}");
+        return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Queue send failed");
     }
-    std::fs::rename(&tmp, &trigger_file).ok();
 
     // Auto-delete one-shot jobs after firing
     let recurring = job.get("recurring").and_then(|r| r.as_bool()).unwrap_or(false);
@@ -972,6 +884,5 @@ fn handle_cron_trigger(
         }
     }
 
-    info!("Cron trigger: {job_id} ({name}) -> @{agent_id}");
     (axum::http::StatusCode::OK, "OK")
 }

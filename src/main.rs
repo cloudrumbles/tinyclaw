@@ -1,17 +1,13 @@
 mod agent_setup;
 mod config;
-mod cron_inbox;
 mod errors;
-mod heartbeat;
 mod invoke;
 mod logging;
-mod pairing;
 mod queue;
-mod routing;
 mod telegram;
 mod types;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use tokio::sync::mpsc;
 use tracing::{info, error};
@@ -39,14 +35,19 @@ async fn main() {
     // Bootstrap: create directories + default config files if missing
     config::bootstrap(&tinyclaw_home);
 
-    // Initialize logging (must hold guard for entire program lifetime)
-    let _log_guard = logging::init_logging(&tinyclaw_home);
+    // Load settings to resolve bot workspace for logging
+    let settings = config::get_settings(&tinyclaw_home);
+    let bot_config = config::get_bot_config(&settings);
+    let workspace = config::bot_workspace(&bot_config.bot_id);
+    std::fs::create_dir_all(workspace.join("logs")).ok();
+
+    // Initialize logging into the bot's workspace
+    let _log_guard = logging::init_logging(&workspace);
 
     info!("TinyClaw starting (Rust)");
     info!("TINYCLAW_HOME: {}", tinyclaw_home.display());
-
-    // Load settings
-    let settings = config::get_settings(&tinyclaw_home);
+    info!("Workspace: {}", workspace.display());
+    info!("Bot: {} ({}) [{}/{}]", bot_config.name, bot_config.bot_id, bot_config.provider, bot_config.model);
 
     // Resolve bot token: runtime env > settings.json > compile-time default
     let bot_token = std::env::var("TELEGRAM_BOT_TOKEN")
@@ -66,34 +67,11 @@ async fn main() {
 
     let webhook_url = std::env::var("WEBHOOK_URL").ok();
 
-    // Log agent/team configuration
-    let agents = config::get_agents(&settings);
-    let teams = config::get_teams(&settings);
-
-    info!("Loaded {} agent(s):", agents.len());
-    for (id, agent) in &agents {
-        info!(
-            "  {id}: {} [{}/{}] cwd={}",
-            agent.name, agent.provider, agent.model, agent.working_directory
-        );
-    }
-    if !teams.is_empty() {
-        info!("Loaded {} team(s):", teams.len());
-        for (id, team) in &teams {
-            info!(
-                "  {id}: {} [agents: {}] leader={}",
-                team.name,
-                team.agents.join(", "),
-                team.leader_agent
-            );
-        }
-    }
-
     // Resolve skills source directory
-    let skills_source = find_skills_source();
+    let skills_source = find_skills_source(&tinyclaw_home);
 
     // Create channels
-    // incoming: telegram + cron inbox → queue processor
+    // incoming: telegram + cron triggers → queue processor
     // outgoing: queue processor → telegram
     let (incoming_tx, incoming_rx) = mpsc::channel::<queue::IncomingMessage>(256);
     let (outgoing_tx, outgoing_rx) = mpsc::channel::<queue::OutgoingMessage>(256);
@@ -101,16 +79,8 @@ async fn main() {
     // Spawn queue processor task
     let qp_home = tinyclaw_home.clone();
     let qp_skills = skills_source.clone();
-    let qp_tx = incoming_tx.clone();
     let queue_handle = tokio::spawn(async move {
-        queue::run_queue_processor(qp_home, qp_skills, incoming_rx, outgoing_tx, qp_tx).await;
-    });
-
-    // Spawn cron inbox watcher (handles heartbeat + scheduled jobs via cron-job.org)
-    let ci_home = tinyclaw_home.clone();
-    let ci_tx = incoming_tx.clone();
-    let cron_inbox_handle = tokio::spawn(async move {
-        cron_inbox::run_cron_inbox(ci_home, ci_tx).await;
+        queue::run_queue_processor(qp_home, qp_skills, incoming_rx, outgoing_tx).await;
     });
 
     // Run telegram (blocks — it runs the teloxide dispatcher)
@@ -120,15 +90,20 @@ async fn main() {
     // If telegram exits, shut down everything
     info!("Telegram task exited, shutting down...");
     queue_handle.abort();
-    cron_inbox_handle.abort();
 }
 
-/// Find the .agents/skills directory relative to the binary or current dir.
-fn find_skills_source() -> Option<PathBuf> {
+/// Find the skills directory: tinyclaw_home/skills/ > next to binary > cwd.
+fn find_skills_source(tinyclaw_home: &Path) -> Option<PathBuf> {
+    // Check tinyclaw_home/skills/
+    let home_skills = tinyclaw_home.join("skills");
+    if home_skills.exists() {
+        return Some(home_skills);
+    }
+
     // Check next to the binary
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
-            let skills = exe_dir.join(".agents").join("skills");
+            let skills = exe_dir.join("skills");
             if skills.exists() {
                 return Some(skills);
             }
@@ -136,7 +111,7 @@ fn find_skills_source() -> Option<PathBuf> {
     }
 
     // Check current working directory
-    let cwd_skills = PathBuf::from(".agents/skills");
+    let cwd_skills = PathBuf::from("skills");
     if cwd_skills.exists() {
         return Some(std::fs::canonicalize(cwd_skills).ok()?);
     }
