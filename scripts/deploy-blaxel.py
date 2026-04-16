@@ -205,6 +205,17 @@ async def main():
                 )
         ok("Skills uploaded")
 
+    # ── Memory server config ─────────────────────────────────────────
+    memory_url = os.environ.get("MEMORY_URL", "")
+    memory_token = os.environ.get("MEMORY_TOKEN", "")
+    if memory_url and memory_token:
+        info("Writing memory config...")
+        await sandbox.fs.write(
+            f"{remote_home}/memory.conf",
+            f"export MEMORY_URL={memory_url}\nexport MEMORY_TOKEN={memory_token}\n",
+        )
+        ok("Memory config written")
+
     # ── Claude CLI ────────────────────────────────────────────────────────
     if not args.skip_claude_install:
         info("Checking claude CLI...")

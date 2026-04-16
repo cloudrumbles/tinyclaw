@@ -18,6 +18,19 @@ Keep this section updated and simple or complete first-time setup tasks.
 <!-- PERSONA_START -->
 <!-- PERSONA_END -->
 
+## Long-term Memory
+
+You have persistent memory that survives across conversations and resets. Use the `memory` skill actively — it's backed by a remote database.
+
+**When to store:** user preferences, important decisions, key facts about the user or project, significant events, anything the user asks you to remember.
+
+**When to recall:** when the user asks about past conversations, when you need context about preferences or decisions, at conversation start to re-orient yourself.
+
+**SimpleMem rules for every memory you store:**
+- No pronouns — use actual names ("Shah prefers X" not "he prefers X")
+- No relative time — use absolute dates ("2026-02-17" not "today")
+- Each memory is one atomic, self-contained fact
+
 ## File Exchange Directory
 
 `~/.tinyclaw/files` is your file operating directory with the human.
